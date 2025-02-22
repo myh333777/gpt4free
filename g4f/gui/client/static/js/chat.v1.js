@@ -15,6 +15,7 @@ const inputCount        = document.getElementById("input-count").querySelector("
 const providerSelect    = document.getElementById("provider");
 const modelSelect       = document.getElementById("model");
 const modelProvider     = document.getElementById("model2");
+const custom_model      = document.getElementById("model3");
 const chatPrompt        = document.getElementById("chatPrompt");
 const settings          = document.querySelector(".settings");
 const chat              = document.querySelector(".conversation");
@@ -22,6 +23,7 @@ const album             = document.querySelector(".images");
 const log_storage       = document.querySelector(".log");
 const switchInput       = document.getElementById("switch");
 const searchButton      = document.getElementById("search");
+const paperclip         = document.querySelector(".user-input .fa-paperclip");
 
 const optionElementsSelector = ".settings input, .settings textarea, #model, #model2, #provider";
 
@@ -35,11 +37,14 @@ let title_storage = {};
 let parameters_storage = {};
 let finish_storage = {};
 let usage_storage = {};
-let reasoning_storage = {}
+let reasoning_storage = {};
+let generate_storage = {};
 let is_demo = false;
+let wakeLock = null;
+let countTokensEnabled = true;
 
 messageInput.addEventListener("blur", () => {
-    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
 });
 
 messageInput.addEventListener("focus", () => {
@@ -55,7 +60,7 @@ appStorage = window.localStorage || {
 
 appStorage.getItem("darkMode") == "false" ? document.body.classList.add("white") : null;
 
-let markdown_render = () => null;
+let markdown_render = (content) => escapeHtml(content);
 if (window.markdownit) {
     const markdown = window.markdownit();
     markdown_render = (content) => {
@@ -78,16 +83,30 @@ function render_reasoning(reasoning, final = false) {
     </div>` : "";
     return `<div class="reasoning_body">
         <div class="reasoning_title">
-           <strong>Reasoning <i class="fa-solid fa-brain"></i>:</strong> ${escapeHtml(reasoning.status)}
+           <strong>Reasoning <i class="brain">🧠</i>:</strong> ${escapeHtml(reasoning.status)}
         </div>
         ${inner_text}
     </div>`;
+}
+
+function render_reasoning_text(reasoning) {
+    return `Reasoning 🧠: ${reasoning.status}\n\n${reasoning.text}\n\n`;
 }
 
 function filter_message(text) {
     return text.replaceAll(
         /<!-- generated images start -->[\s\S]+<!-- generated images end -->/gm, ""
     ).replace(/ \[aborted\]$/g, "").replace(/ \[error\]$/g, "");
+}
+
+function filter_message_content(text) {
+    return text.replace(/ \[aborted\]$/g, "").replace(/ \[error\]$/g, "")
+}
+
+function filter_message_image(text) {
+    return text.replaceAll(
+        /\]\(\/generate\//gm, "](/images/"
+    )
 }
 
 function fallback_clipboard (text) {
@@ -182,173 +201,178 @@ const get_message_el = (el) => {
     return message_el;
 }
 
+function register_message_images() {
+    message_box.querySelectorAll(`.loading-indicator`).forEach((el) => el.remove());
+    message_box.querySelectorAll(`.message img:not([alt="your avatar"])`).forEach(async (el) => {
+        if (!el.complete) {
+            const indicator = document.createElement("span");
+            indicator.classList.add("loading-indicator");
+            indicator.innerHTML = `<i class="fas fa-spinner fa-spin"></i>`;
+            el.parentElement.appendChild(indicator);
+            el.onerror = () => {
+                let indexCommand;
+                if ((indexCommand = el.src.indexOf("/generate/")) >= 0) {
+                    generate_storage[window.conversation_id] = true;
+                    indexCommand = indexCommand + "/generate/".length + 1;
+                    let newPath = el.src.substring(indexCommand)
+                    let filename = newPath.replace(/(?:\?.+?|$)/, "");
+                    let seed = Math.floor(Date.now() / 1000);
+                    newPath = `https://image.pollinations.ai/prompt/${newPath}?seed=${seed}&nologo=true`;
+                    let downloadUrl = newPath;
+                    if (document.getElementById("download_images")?.checked) {
+                        downloadUrl = `/images/${filename}?url=${escapeHtml(newPath)}`;
+                    }
+                    const link = document.createElement("a");
+                    link.setAttribute("href", newPath);
+                    const newImg = document.createElement("img");
+                    newImg.src = downloadUrl;
+                    newImg.alt = el.alt;
+                    newImg.onload = () => {
+                        lazy_scroll_to_bottom();
+                        indicator.remove();
+                    }
+                    link.appendChild(newImg);
+                    el.parentElement.appendChild(link);
+                } else {
+                    const span = document.createElement("span");
+                    span.innerHTML = `<i class="fa-solid fa-plug"></i>${escapeHtml(el.alt)}`;
+                    el.parentElement.appendChild(span);
+                }
+                el.remove();
+                indicator.remove();
+            }
+            el.onload = () => {
+                indicator.remove();
+                lazy_scroll_to_bottom();
+            }
+        }
+    });
+}
+
 const register_message_buttons = async () => {
     message_box.querySelectorAll(".message .content .provider").forEach(async (el) => {
-        if (!("click" in el.dataset)) {
-            el.dataset.click = "true";
-            const provider_forms = document.querySelector(".provider_forms");
-            const provider_form = provider_forms.querySelector(`#${el.dataset.provider}-form`);
-            const provider_link = el.querySelector("a");
-            provider_link?.addEventListener("click", async (event) => {
-                event.preventDefault();
-                if (provider_form) {
-                    provider_form.classList.remove("hidden");
-                    provider_forms.classList.remove("hidden");
-                    chat.classList.add("hidden");
-                }
-                return false;
-            });
-            document.getElementById("close_provider_forms").addEventListener("click", async () => {
-                provider_form.classList.add("hidden");
-                provider_forms.classList.add("hidden");
-                chat.classList.remove("hidden");
-            });
-        }
+        const provider_forms = document.querySelector(".provider_forms");
+        const provider_form = provider_forms.querySelector(`#${el.dataset.provider}-form`);
+        const provider_link = el.querySelector("a");
+        provider_link?.addEventListener("click", async (event) => {
+            event.preventDefault();
+            if (provider_form) {
+                provider_form.classList.remove("hidden");
+                provider_forms.classList.remove("hidden");
+                chat.classList.add("hidden");
+            }
+            return false;
+        });
+        document.getElementById("close_provider_forms").addEventListener("click", async () => {
+            provider_form.classList.add("hidden");
+            provider_forms.classList.add("hidden");
+            chat.classList.remove("hidden");
+        });
     });
 
-    message_box.querySelectorAll(".message .fa-xmark").forEach(async (el) => {
-        if (!("click" in el.dataset)) {
-            el.dataset.click = "true";
-            el.addEventListener("click", async () => {
-                const message_el = get_message_el(el);
-                await remove_message(window.conversation_id, message_el.dataset.index);
-                await safe_load_conversation(window.conversation_id, false);
-            });
-        }
-    });
+    message_box.querySelectorAll(".message .fa-xmark").forEach(async (el) => el.addEventListener("click", async () => {
+        const message_el = get_message_el(el);
+        await remove_message(window.conversation_id, message_el.dataset.index);
+        message_el.remove();
+        await safe_load_conversation(window.conversation_id, false);
+    }));
 
-    message_box.querySelectorAll(".message .fa-clipboard").forEach(async (el) => {
-        if (!("click" in el.dataset)) {
-            el.dataset.click = "true";
-            el.addEventListener("click", async () => {
-                let message_el = get_message_el(el);
-                let response = await fetch(message_el.dataset.object_url);
-                let copyText = await response.text();
-                try {        
-                    if (!navigator.clipboard) {
-                        throw new Error("navigator.clipboard: Clipboard API unavailable.");
-                    }
-                    await navigator.clipboard.writeText(copyText);
-                } catch (e) {
-                    console.error(e);
-                    console.error("Clipboard API writeText() failed! Fallback to document.exec(\"copy\")...");
-                    fallback_clipboard(copyText);
-                }
-                el.classList.add("clicked");
-                setTimeout(() => el.classList.remove("clicked"), 1000);
-            })
+    message_box.querySelectorAll(".message .fa-clipboard").forEach(async (el) => el.addEventListener("click", async () => {
+        let message_el = get_message_el(el);
+        let response = await fetch(message_el.dataset.object_url);
+        let copyText = await response.text();
+        try {        
+            if (!navigator.clipboard) {
+                throw new Error("navigator.clipboard: Clipboard API unavailable.");
+            }
+            await navigator.clipboard.writeText(copyText);
+        } catch (e) {
+            console.error(e);
+            console.error("Clipboard API writeText() failed! Fallback to document.exec(\"copy\")...");
+            fallback_clipboard(copyText);
         }
-    });
+        el.classList.add("clicked");
+        setTimeout(() => el.classList.remove("clicked"), 1000);
+    }))
 
-    message_box.querySelectorAll(".message .fa-file-export").forEach(async (el) => {
-        if (!("click" in el.dataset)) {
-            el.dataset.click = "true";
-            el.addEventListener("click", async () => {
-                let message_el = get_message_el(el);
-                const elem = window.document.createElement('a');
-                let filename = `chat ${new Date().toLocaleString()}.md`.replaceAll(":", "-");
-                elem.href = message_el.dataset.object_url;
-                elem.download = filename;        
-                document.body.appendChild(elem);
-                elem.click();        
-                document.body.removeChild(elem);
-                el.classList.add("clicked");
-                setTimeout(() => el.classList.remove("clicked"), 1000);
-            })
-        }
-    });
+    message_box.querySelectorAll(".message .fa-file-export").forEach(async (el) => el.addEventListener("click", async () => {
+        const elem = window.document.createElement('a');
+        let filename = `chat ${new Date().toLocaleString()}.md`.replaceAll(":", "-");
+        const conversation = await get_conversation(window.conversation_id);
+        let buffer = "";
+        conversation.items.forEach(message => {
+            buffer += render_reasoning_text(message.reasoning);
+            buffer += `${message.role == 'user' ? 'User' : 'Assistant'}: ${message.content.trim()}\n\n\n`;
+        });
+        var download = document.getElementById("download");
+        download.setAttribute("href", "data:text/markdown;charset=utf-8," + encodeURIComponent(buffer.trim()));
+        download.setAttribute("download", filename);
+        download.click();
+        el.classList.add("clicked");
+        setTimeout(() => el.classList.remove("clicked"), 1000);
+    }))
 
-    message_box.querySelectorAll(".message .fa-volume-high").forEach(async (el) => {
-        if (!("click" in el.dataset)) {
-            el.dataset.click = "true";
-            el.addEventListener("click", async () => {
-                const message_el = get_message_el(el);
-                let audio;
-                if (message_el.dataset.synthesize_url) {
-                    el.classList.add("active");
-                    setTimeout(()=>el.classList.remove("active"), 2000);
-                    const media_player = document.querySelector(".media_player");
-                    if (!media_player.classList.contains("show")) {
-                        media_player.classList.add("show");
-                        audio = new Audio(message_el.dataset.synthesize_url);
-                        audio.controls = true;   
-                        media_player.appendChild(audio);
-                    } else {
-                        audio = media_player.querySelector("audio");
-                        audio.src = message_el.dataset.synthesize_url;
-                    }
-                    audio.play();
-                    return;
-                }
-            });
+    message_box.querySelectorAll(".message .fa-volume-high").forEach(async (el) => el.addEventListener("click", async () => {
+        const message_el = get_message_el(el);
+        let audio;
+        if (message_el.dataset.synthesize_url) {
+            el.classList.add("active");
+            setTimeout(()=>el.classList.remove("active"), 2000);
+            const media_player = document.querySelector(".media_player");
+            if (!media_player.classList.contains("show")) {
+                media_player.classList.add("show");
+                audio = new Audio(message_el.dataset.synthesize_url);
+                audio.controls = true;   
+                media_player.appendChild(audio);
+            } else {
+                audio = media_player.querySelector("audio");
+                audio.src = message_el.dataset.synthesize_url;
+            }
+            audio.play();
+            return;
         }
-    });
+    }));
 
-    message_box.querySelectorAll(".message .regenerate_button").forEach(async (el) => {
-        if (!("click" in el.dataset)) {
-            el.dataset.click = "true";
-            el.addEventListener("click", async () => {
-                const message_el = get_message_el(el);
-                el.classList.add("clicked");
-                setTimeout(() => el.classList.remove("clicked"), 1000);
-                await ask_gpt(get_message_id(), message_el.dataset.index);
-            });
-        }
-    });
+    message_box.querySelectorAll(".message .regenerate_button").forEach(async (el) => el.addEventListener("click", async () => {
+        const message_el = get_message_el(el);
+        el.classList.add("clicked");
+        setTimeout(() => el.classList.remove("clicked"), 1000);
+        await ask_gpt(get_message_id(), message_el.dataset.index);
+    }));
 
-    message_box.querySelectorAll(".message .continue_button").forEach(async (el) => {
-        if (!("click" in el.dataset)) {
-            el.dataset.click = "true";
-            el.addEventListener("click", async () => {
-                if (!el.disabled) {
-                    el.disabled = true;
-                    const message_el = get_message_el(el);
-                    el.classList.add("clicked");
-                    setTimeout(() => {el.classList.remove("clicked"); el.disabled = false}, 1000);
-                    await ask_gpt(get_message_id(), message_el.dataset.index, false, null, null, "continue");
-                }
-            });
-        }
-    });
+    message_box.querySelectorAll(".message .continue_button").forEach(async (el) => el.addEventListener("click", async () => {
+        if (!el.disabled) {
+            el.disabled = true;
+            const message_el = get_message_el(el);
+            el.classList.add("clicked");
+            setTimeout(() => {el.classList.remove("clicked"); el.disabled = false}, 1000);
+            await ask_gpt(get_message_id(), message_el.dataset.index, false, null, null, "continue");
+        }}
+    ));
 
-    message_box.querySelectorAll(".message .fa-whatsapp").forEach(async (el) => {
-        if (!("click" in el.dataset)) {
-            el.dataset.click = "true";
-            el.addEventListener("click", async () => {
-                const text = get_message_el(el).innerText;
-                window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
-            });
-        }
-    });
+    message_box.querySelectorAll(".message .fa-whatsapp").forEach(async (el) => el.addEventListener("click", async () => {
+        const text = get_message_el(el).innerText;
+        window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+    }));
 
-    message_box.querySelectorAll(".message .fa-print").forEach(async (el) => {
-        if (!("click" in el.dataset)) {
-            el.dataset.click = "true";
-            el.addEventListener("click", async () => {
-                const message_el = get_message_el(el);
-                el.classList.add("clicked");
-                message_box.scrollTop = 0;
-                message_el.classList.add("print");
-                setTimeout(() => {
-                    el.classList.remove("clicked");
-                    message_el.classList.remove("print");
-                }, 1000);
-                window.print()
-            })
-        }
-    });
+    message_box.querySelectorAll(".message .fa-print").forEach(async (el) => el.addEventListener("click", async () => {
+        const message_el = get_message_el(el);
+        el.classList.add("clicked");
+        message_box.scrollTop = 0;
+        message_el.classList.add("print");
+        setTimeout(() => {
+            el.classList.remove("clicked");
+            message_el.classList.remove("print");
+        }, 1000);
+        window.print()
+    }));
 
-    message_box.querySelectorAll(".message .reasoning_title").forEach(async (el) => {
-        if (!("click" in el.dataset)) {
-            el.dataset.click = "true";
-            el.addEventListener("click", async () => {
-                let text_el = el.parentElement.querySelector(".reasoning_text");
-                if (text_el) {
-                    text_el.classList[text_el.classList.contains("hidden") ? "remove" : "add"]("hidden");
-                }
-            })
+    message_box.querySelectorAll(".message .reasoning_title").forEach(async (el) => el.addEventListener("click", async () => {
+        let text_el = el.parentElement.querySelector(".reasoning_text");
+        if (text_el) {
+            text_el.classList[text_el.classList.contains("hidden") ? "remove" : "add"]("hidden");
         }
-    });
+    }));
 }
 
 const delete_conversations = async () => {
@@ -369,7 +393,7 @@ const handle_ask = async (do_ask_gpt = true) => {
     messageInput.focus();
     await scroll_to_bottom();
 
-    let message = messageInput.value;
+    let message = messageInput.value.trim();
     if (message.length <= 0) {
         return;
     }
@@ -377,6 +401,23 @@ const handle_ask = async (do_ask_gpt = true) => {
     await count_input()
     await add_conversation(window.conversation_id);
 
+    // Is message a url?
+    const expression = /^https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)$/gi;
+    const regex = new RegExp(expression);
+    if (message.match(regex)) {
+        paperclip.classList.add("blink");
+        const blob = new Blob([JSON.stringify([{url: message}])], { type: 'application/json' });
+        const file = new File([blob], 'downloads.json', { type: 'application/json' }); // Create File object
+        let formData = new FormData();
+        formData.append('files', file); // Append as a file
+        const bucket_id = uuid();
+        await fetch(`/backend-api/v2/files/${bucket_id}`, {
+            method: 'POST',
+            body: formData
+        });
+        connectToSSE(`/backend-api/v2/files/${bucket_id}`, false, bucket_id); //Retrieve and refine
+        return;
+    }
     let message_index = await add_message(window.conversation_id, "user", message);
     let message_id = get_message_id();
 
@@ -407,7 +448,7 @@ const handle_ask = async (do_ask_gpt = true) => {
                 ${images.map((object)=>'<img src="' + object + '" alt="Image upload">').join("")}
                 </div>
                 <div class="count">
-                    ${count_words_and_tokens(message, get_selected_model()?.value)}
+                    ${countTokensEnabled ? count_words_and_tokens(message, get_selected_model()?.value) : ""}
                 </div>
             </div>
         </div>
@@ -438,6 +479,10 @@ async function safe_remove_cancel_button() {
         }
     }
     stop_generating.classList.add("stop_generating-hidden");
+    if (wakeLock) {
+        wakeLock.release();
+        wakeLock = null;
+    }
 }
 
 regenerate_button.addEventListener("click", async () => {
@@ -482,6 +527,8 @@ document.querySelector(".media_player .fa-x").addEventListener("click", ()=>{
 const prepare_messages = (messages, message_index = -1, do_continue = false, do_filter = true) => {
     messages = [ ...messages ]
     if (message_index != null) {
+        console.debug("Messages Index:", message_index);
+
         // Removes messages after selected
         if (message_index >= 0) {
             messages = messages.filter((_, index) => message_index >= index);
@@ -495,6 +542,7 @@ const prepare_messages = (messages, message_index = -1, do_continue = false, do_
                     break;
                 }
             }
+            console.debug("Messages filtered:", messages);
         }
     }
     // Combine assistant messages
@@ -530,10 +578,14 @@ const prepare_messages = (messages, message_index = -1, do_continue = false, do_
         while (last_message = messages.pop()) {
             if (last_message["role"] == "user") {
                 filtered_messages.push(last_message);
+            } else {
                 break;
             }
         }
         messages = filtered_messages.reverse();
+        if (last_message) {
+            console.debug("History removed:", messages)
+        }
     }
 
     messages.forEach((new_message, i) => {
@@ -565,6 +617,7 @@ const prepare_messages = (messages, message_index = -1, do_continue = false, do_
             }
         }
     });
+    console.debug("Final messages:", final_messages)
 
     return final_messages;
 }
@@ -722,27 +775,33 @@ async function add_message_chunk(message, message_id, provider, scroll, finish_m
         `;
     } else if (message.type == "message") {
         console.error(message.message)
+        await api("log", {...message, provider: provider_storage[message_id]});
     } else if (message.type == "error") {
         content_map.update_timeouts.forEach((timeoutId)=>clearTimeout(timeoutId));
         content_map.update_timeouts = [];
-        error_storage[message_id] = message.error
-        console.error(message.error);
-        content_map.inner.innerHTML += markdown_render(`**An error occured:** ${message.error}`);
+        error_storage[message_id] = message.message
+        console.error(message.message);
+        content_map.inner.innerHTML += markdown_render(`**An error occured:** ${message.message}`);
+        if (finish_message) {
+            await finish_message();
+        }
         let p = document.createElement("p");
         p.innerText = message.error;
         log_storage.appendChild(p);
         await api("log", {...message, provider: provider_storage[message_id]});
     } else if (message.type == "preview") {
-        if (content_map.inner.clientHeight > 200)
-            content_map.inner.style.height = content_map.inner.clientHeight + "px";
         if (img = content_map.inner.querySelector("img"))
             if (!img.complete)
                 return;
-        content_map.inner.innerHTML = markdown_render(message.preview);
+            else
+                img.src = message.images;
+        else {
+            content_map.inner.innerHTML = markdown_render(message.preview);
+            await register_message_images();
+        }
     } else if (message.type == "content") {
         message_storage[message_id] += message.content;
         update_message(content_map, message_id, null, scroll);
-        content_map.inner.style.height = "";
     } else if (message.type == "log") {
         let p = document.createElement("p");
         p.innerText = message.log;
@@ -788,15 +847,25 @@ function is_stopped() {
     return false;
 }
 
+const requestWakeLock = async (onVisibilityChange = false) => {
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+    catch(err) {
+      console.error(err);
+    }
+  };
+
 const ask_gpt = async (message_id, message_index = -1, regenerate = false, provider = null, model = null, action = null) => {
     if (!model && !provider) {
         model = get_selected_model()?.value || null;
-        provider = providerSelect.options[providerSelect.selectedIndex].value;
+        provider = providerSelect.options[providerSelect.selectedIndex]?.value;
     }
     let conversation = await get_conversation(window.conversation_id);
     if (!conversation) {
         return;
     }
+    await requestWakeLock();
     messages = prepare_messages(conversation.items, message_index, action=="continue");
     message_storage[message_id] = "";
     stop_generating.classList.remove("stop_generating-hidden");
@@ -808,16 +877,17 @@ const ask_gpt = async (message_id, message_index = -1, regenerate = false, provi
     if (scroll) {
         await lazy_scroll_to_bottom();
     }
-
-    let count_total = message_box.querySelector('.count_total');
-    count_total ? count_total.parentElement.removeChild(count_total) : null;
+    if (countTokensEnabled) {
+        let count_total = message_box.querySelector('.count_total');
+        count_total ? count_total.parentElement.removeChild(count_total) : null;
+    }
 
     const message_el = document.createElement("div");
     message_el.classList.add("message");
     if (message_index != -1 || regenerate) {
         message_el.classList.add("regenerate");
     }
-    message_el.innerHTML += `
+    message_el.innerHTML = `
         <div class="assistant">
             ${gpt_image}
             <i class="fa-solid fa-xmark"></i>
@@ -865,19 +935,24 @@ const ask_gpt = async (message_id, message_index = -1, regenerate = false, provi
         }
         if (message_storage[message_id]) {
             const message_provider = message_id in provider_storage ? provider_storage[message_id] : null;
-            let usage;
+            let usage = {};
             if (usage_storage[message_id]) {
                 usage = usage_storage[message_id];
                 delete usage_storage[message_id];
             }
-            // Calculate usage if we have no usage result jet
-            if (document.getElementById("track_usage").checked && !usage && window.GPTTokenizer_cl100k_base) {
+            usage = {
+                model: message_provider?.model,
+                provider: message_provider?.name,
+                ...usage
+            }
+            // Calculate usage if we don't have it jet
+            if (countTokensEnabled && document.getElementById("track_usage").checked && !usage.prompt_tokens && window.GPTTokenizer_cl100k_base) {
                 const prompt_token_model = model?.startsWith("gpt-3") ? "gpt-3.5-turbo" : "gpt-4"
                 const prompt_tokens = GPTTokenizer_cl100k_base?.encodeChat(messages, prompt_token_model).length;
-                const completion_tokens = count_tokens(message_provider?.model, message_storage[message_id]);
+                const completion_tokens = count_tokens(message_provider?.model, message_storage[message_id])
+                    + reasoning_storage[message_id] ? count_tokens(message_provider?.model, reasoning_storage[message_id].text) : 0;
                 usage = {
-                    model: message_provider?.model,
-                    provider: message_provider?.name,
+                    ...usage,
                     prompt_tokens: prompt_tokens,
                     completion_tokens: completion_tokens,
                     total_tokens: prompt_tokens + completion_tokens
@@ -896,7 +971,7 @@ const ask_gpt = async (message_id, message_index = -1, regenerate = false, provi
             await add_message(
                 window.conversation_id,
                 "assistant",
-                final_message,
+                filter_message_image(final_message),
                 message_provider,
                 message_index,
                 synthesize_storage[message_id],
@@ -922,7 +997,7 @@ const ask_gpt = async (message_id, message_index = -1, regenerate = false, provi
             delete controller_storage[message_id];
         }
         // Reload conversation if no error
-        if (!error_storage[message_id]) {
+        if (!error_storage[message_id] && !generate_storage[window.conversation_id]) {
             await safe_load_conversation(window.conversation_id, scroll);
         }
         let cursorDiv = message_el.querySelector(".cursor");
@@ -931,7 +1006,7 @@ const ask_gpt = async (message_id, message_index = -1, regenerate = false, provi
             await lazy_scroll_to_bottom();
         }
         await safe_remove_cancel_button();
-        await register_message_buttons();
+        await register_message_images();
         await load_conversations();
         regenerate_button.classList.remove("regenerate-hidden");
     }
@@ -939,19 +1014,27 @@ const ask_gpt = async (message_id, message_index = -1, regenerate = false, provi
         let api_key;
         if (is_demo && provider == "Feature") {
             api_key = localStorage.getItem("user");
-        } else if (is_demo && provider != "Custom") {
+        } else if (["HuggingSpace", "G4F"].includes(provider)) {
+            api_key = localStorage.getItem("HuggingSpace-api_key");
+        } else if (is_demo) {
             api_key = localStorage.getItem("HuggingFace-api_key");
+            if (!api_key) {
+                location.href = "/";
+                return;
+            }
         } else {
             api_key = get_api_key_by_provider(provider);
-        }
-        if (is_demo && !api_key && provider != "Custom") {
-            location.href = "/";
-            return;
         }
         const input = imageInput && imageInput.files.length > 0 ? imageInput : cameraInput;
         const files = input && input.files.length > 0 ? input.files : null;
         const download_images = document.getElementById("download_images")?.checked;
-        const api_base = provider == "Custom" ? document.getElementById(`${provider}-api_base`).value : null;
+        let api_base;
+        if (provider == "Custom") {
+            api_base = document.getElementById("api_base")?.value;
+            if (!api_base) {
+                provider = "";
+            }
+        }
         const ignored = Array.from(settings.querySelectorAll("input.provider:not(:checked)")).map((el)=>el.value);
         await api("conversation", {
             id: message_id,
@@ -1181,8 +1264,8 @@ const load_conversation = async (conversation_id, scroll=true) => {
         } else {
             buffer = "";
         }
-        buffer = buffer.replace(/ \[aborted\]$/g, "").replace(/ \[error\]$/g, "");
-        new_content = item.content.replace(/ \[aborted\]$/g, "").replace(/ \[error\]$/g, "");
+        buffer = filter_message_content(buffer);
+        new_content = filter_message_content(item.content);
         buffer = merge_messages(buffer, new_content);
         last_model = item.provider?.model;
         providers.push(item.provider?.name);
@@ -1258,12 +1341,17 @@ const load_conversation = async (conversation_id, scroll=true) => {
             }
         }
 
-        if (!item.continue) {
-            completion_tokens = 0;
+        countTokensEnabled = appStorage.getItem("countTokens") != "false";
+        let next_usage;
+        let prompt_tokens; 
+        if (countTokensEnabled) {
+            if (!item.continue) {
+                completion_tokens = 0;
+            }
+            completion_tokens += item.usage?.completion_tokens ? item.usage.completion_tokens : 0;
+            next_usage = messages.length > next_i ? messages[next_i].usage : null;
+            prompt_tokens = next_usage?.prompt_tokens ? next_usage?.prompt_tokens : 0
         }
-        completion_tokens += item.usage?.completion_tokens ? item.usage.completion_tokens : 0;
-        let next_usage = messages.length > next_i ? messages[next_i].usage : null;
-        let prompt_tokens = next_usage?.prompt_tokens ? next_usage?.prompt_tokens : 0
 
         elements.push(`
             <div class="message${item.regenerate ? " regenerate": ""}" data-index="${i}" data-object_url="${objectUrl}" data-synthesize_url="${synthesize_url}">
@@ -1282,7 +1370,10 @@ const load_conversation = async (conversation_id, scroll=true) => {
                         ${markdown_render(buffer)}
                     </div>
                     <div class="count">
-                        ${count_words_and_tokens(buffer, next_provider?.model, completion_tokens, prompt_tokens)}
+                        ${countTokensEnabled ? count_words_and_tokens(
+                            item.reasoning ? item.reasoning.text + buffer : buffer,
+                            next_provider?.model, completion_tokens, prompt_tokens
+                        ) : ""}
                         ${add_buttons.join("")}
                     </div>
                 </div>
@@ -1290,7 +1381,7 @@ const load_conversation = async (conversation_id, scroll=true) => {
         `);
     });
 
-    if (window.GPTTokenizer_cl100k_base) {
+    if (countTokensEnabled && window.GPTTokenizer_cl100k_base) {
         const filtered = prepare_messages(messages, null, true, false);
         if (filtered.length > 0) {
             last_model = last_model?.startsWith("gpt-3") ? "gpt-3.5-turbo" : "gpt-4"
@@ -1559,8 +1650,10 @@ window.addEventListener('popstate', hide_sidebar, false);
 sidebar_button.addEventListener("click", async () => {
     if (sidebar.classList.contains("shown")) {
         await hide_sidebar();
+        chat.classList.remove("hidden");
     } else {
         await show_menu();
+        chat.classList.add("hidden");
     }
     window.scrollTo(0, 0);
 });
@@ -1638,12 +1731,9 @@ const register_settings_storage = async () => {
 const load_settings_storage = async () => {
     const optionElements = document.querySelectorAll(optionElementsSelector);
     optionElements.forEach((element) => {
-        if (element.name && element.name != element.id && (value = appStorage.getItem(element.name))) {
-            appStorage.setItem(element.id, value);
-            appStorage.removeItem(element.name);
-        }
-        if (!(value = appStorage.getItem(element.id))) {
-            return;
+        value = appStorage.getItem(element.id);
+        if (value == null && element.dataset.value) {
+            value = element.dataset.value;
         }
         if (value) {
             switch (element.type) {
@@ -1657,10 +1747,10 @@ const load_settings_storage = async () => {
                 case "number":
                 case "textarea":
                     if (element.id.endsWith("-api_key")) {
-                        element.placeholder = value && value.length >= 22 ? (value.substring(0, 12)+"*".repeat(12)+value.substring(value.length-12)) : "*".repeat(value.length);
+                        element.placeholder = value && value.length >= 22 ? (value.substring(0, 12)+"*".repeat(12)+value.substring(value.length-12)) : "*".repeat(value ? value.length : 0);
                         element.dataset.value = value;
                     } else {
-                        element.value = value;
+                        element.value = value == null ? element.dataset.value : value;
                     }
                     break;
                 default:
@@ -1748,11 +1838,17 @@ function update_message(content_map, message_id, content = null, scroll = true) 
                 content = content.substring(0, lastIndex) + '<span class="cursor"></span>' + lastElement;
             }
         }
-        content_map.inner.innerHTML = content;
         if (error_storage[message_id]) {
-            content_map.inner.innerHTML += markdown_render(`**An error occured:** ${error_storage[message_id]}`);
+            content_map.inner.innerHTML = message + markdown_render(`**An error occured:** ${error_storage[message_id]}`);
+        } else {
+            content_map.inner.innerHTML = content;
         }
-        content_map.count.innerText = count_words_and_tokens(message_storage[message_id], provider_storage[message_id]?.model);
+        if (countTokensEnabled) {
+            content_map.count.innerText = count_words_and_tokens(
+                (reasoning_storage[message_id] ? reasoning_storage[message_id].text : "")
+                + message_storage[message_id],
+                provider_storage[message_id]?.model);
+        }
         highlight(content_map.inner);
         if (scroll) {
             lazy_scroll_to_bottom();
@@ -1764,8 +1860,12 @@ function update_message(content_map, message_id, content = null, scroll = true) 
 
 let countFocus = messageInput;
 const count_input = async () => {
-    if (countFocus.value) {
-        inputCount.innerText = count_words_and_tokens(countFocus.value, get_selected_model()?.value);
+    if (countTokensEnabled && countFocus.value) {
+        if (window.matchMedia("(pointer:coarse)")) {
+            inputCount.innerText = `(${count_tokens(get_selected_model()?.value, countFocus.value)} tokens)`;
+        } else {
+            inputCount.innerText = count_words_and_tokens(countFocus.value, get_selected_model()?.value);
+        }
     } else {
         inputCount.innerText = "";
     }
@@ -1802,18 +1902,21 @@ async function on_load() {
     count_input();
     if (/\/settings\//.test(window.location.href)) {
         open_settings();
-    } else if (/\/chat\/[^?]+/.test(window.location.href)) {
-        load_conversation(window.conversation_id);
-    } else {
+    } else if (/\/chat\/share/.test(window.location.href)) {
         chatPrompt.value = document.getElementById("systemPrompt")?.value || "";
         let chat_url = new URL(window.location.href)
         let chat_params = new URLSearchParams(chat_url.search);
         if (chat_params.get("prompt")) {
             messageInput.value = chat_params.get("prompt");
-            await handle_ask();
-        } else {
-            say_hello()
+            messageInput.style.height = messageInput.scrollHeight  + "px";
+            messageInput.focus();
+            //await handle_ask();
         }
+    } else if (/\/chat\/[^?]+/.test(window.location.href)) {
+        load_conversation(window.conversation_id);
+    } else {
+        chatPrompt.value = document.getElementById("systemPrompt")?.value || "";
+        say_hello();
     }
     load_conversations();
 }
@@ -1834,6 +1937,7 @@ const load_provider_option = (input, provider_name) => {
             (el) => el.removeAttribute("disabled")
         );
         settings.querySelector(`.field:has(#${provider_name}-api_key)`)?.classList.remove("hidden");
+        settings.querySelector(`.field:has(#${provider_name}-api_base)`)?.classList.remove("hidden");
     } else {
         modelSelect.querySelectorAll(`option[data-providers*="${provider_name}"]`).forEach(
             (el) => {
@@ -1848,7 +1952,7 @@ const load_provider_option = (input, provider_name) => {
         providerSelect.querySelectorAll(`option[data-parent="${provider_name}"]`).forEach(
             (el) => el.setAttribute("disabled", "disabled")
         );
-        settings.querySelector(`.field:has(#${provider_name}-api_key)`)?.classList.add("hidden");
+        //settings.querySelector(`.field:has(#${provider_name}-api_key)`)?.classList.add("hidden");
     }
 };
 
@@ -1858,14 +1962,14 @@ async function on_api() {
     messageInput.addEventListener("keydown", async (evt) => {
         if (prompt_lock) return;
         // If not mobile and not shift enter
-        if (!window.matchMedia("(pointer:coarse)").matches && evt.keyCode === 13 && !evt.shiftKey) {
+        let do_enter = messageInput.value.endsWith("\n\n\n\n");
+        if (do_enter || !window.matchMedia("(pointer:coarse)").matches && evt.keyCode === 13 && !evt.shiftKey) {
             evt.preventDefault();
             console.log("pressed enter");
             prompt_lock = true;
             setTimeout(()=>prompt_lock=false, 3000);
             await handle_ask();
         } else {
-            messageInput.style.removeProperty("height");
             messageInput.style.height = messageInput.scrollHeight  + "px";
         }
     });
@@ -1881,7 +1985,9 @@ async function on_api() {
         stop_recognition();
         await handle_ask(false);
     });
-    messageInput.focus();
+    messageInput.addEventListener(`click`, async () => {
+        stop_recognition();
+    });
 
     let provider_options = [];
     models = await api("models");
@@ -1900,10 +2006,13 @@ async function on_api() {
             return;
         }
         providerSelect.innerHTML = `
-            <option value="">Demo Mode</option>
+            <option value="" selected="selected">Demo Mode</option>
             <option value="Feature">Feature Provider</option>
-            <option value="Custom">Custom Provider</option>`;
-        providerSelect.selectedIndex = 0;
+            <option value="PollinationsAI">Pollinations AI</option>
+            <option value="G4F">G4F framework</option>
+            <option value="HuggingFace">HuggingFace</option>
+            <option value="HuggingSpace">HuggingSpace</option>
+            <option value="HuggingChat">HuggingChat</option>`;
         document.getElementById("pin").disabled = true;
         document.getElementById("refine")?.parentElement.classList.add("hidden")
         const track_usage = document.getElementById("track_usage");
@@ -1915,8 +2024,8 @@ async function on_api() {
             }
         });
         login_urls = {
-            "Custom": ["Custom Provider", "", []],
-            "HuggingFace": ["HuggingFace", "", []],
+            "HuggingFace": ["HuggingFace", "https://huggingface.co/settings/tokens", []],
+            "HuggingSpace": ["HuggingSpace", "https://huggingface.co/spaces/roxky/g4f-new?get_gpu_token=true", []],
         };
     } else {
         providers = await api("providers")
@@ -1937,54 +2046,99 @@ async function on_api() {
 
             if (provider.parent) {
                 if (!login_urls[provider.parent]) {
-                    login_urls[provider.parent] = [provider.label, provider.login_url, [provider.name]];
+                    login_urls[provider.parent] = [provider.label, provider.login_url, [provider.name], provider.auth];
                 } else {
                     login_urls[provider.parent][2].push(provider.name);
                 }
             } else if (provider.login_url) {
                 if (!login_urls[provider.name]) {
-                    login_urls[provider.name] = [provider.label, provider.login_url, []];
+                    login_urls[provider.name] = [provider.label, provider.login_url, [], provider.auth];
                 } else {
                     login_urls[provider.name][0] = provider.label;
                     login_urls[provider.name][1] = provider.login_url;
                 }
             }
         });
+
+        let providersContainer = document.createElement("div");
+        providersContainer.classList.add("field", "collapsible");
+        providersContainer.innerHTML = `
+            <div class="collapsible-header">
+                <span class="label">Providers (Enable/Disable)</span>
+                <i class="fa-solid fa-chevron-down"></i>
+            </div>
+            <div class="collapsible-content hidden"></div>
+        `;
+        settings.querySelector(".paper").appendChild(providersContainer);
+
         providers.forEach((provider) => {
             if (!provider.parent) {
-                option = document.createElement("div");
-                option.classList.add("field");
+                let option = document.createElement("div");
+                option.classList.add("provider-item");
+                let api_key = appStorage.getItem(`${provider.name}-api_key`);
                 option.innerHTML = `
                     <span class="label">Enable ${provider.label}</span>
-                    <input id="Provider${provider.name}" type="checkbox" name="Provider${provider.name}" value="${provider.name}" class="provider" checked="">
+                    <input id="Provider${provider.name}" type="checkbox" name="Provider${provider.name}" value="${provider.name}" class="provider" ${!provider.auth || api_key ? 'checked="checked"' : ''}/>
                     <label for="Provider${provider.name}" class="toogle" title="Remove provider from dropdown"></label>
                 `;
                 option.querySelector("input").addEventListener("change", (event) => load_provider_option(event.target, provider.name));
-                settings.querySelector(".paper").appendChild(option);
+                providersContainer.querySelector(".collapsible-content").appendChild(option);
                 provider_options[provider.name] = option;
             }
         });
-        await load_provider_models(appStorage.getItem("provider"))
+
+        providersContainer.querySelector(".collapsible-header").addEventListener('click', (e) => {
+            providersContainer.querySelector(".collapsible-content").classList.toggle('hidden');
+            providersContainer.querySelector(".collapsible-header").classList.toggle('active');
+        });
     }
-    for (let [name, [label, login_url, childs]] of Object.entries(login_urls)) {
+
+    if (appStorage.getItem("provider")) {
+        await load_provider_models(appStorage.getItem("provider"))
+    } else {
+        providerSelect.selectedIndex = 0;
+    }
+
+    let providersListContainer = document.createElement("div");
+    providersListContainer.classList.add("field", "collapsible");
+    providersListContainer.innerHTML = `
+        <div class="collapsible-header">
+            <span class="label">Providers API key</span>
+            <i class="fa-solid fa-chevron-down"></i>
+        </div>
+        <div class="collapsible-content api-key hidden"></div>
+    `;
+    settings.querySelector(".paper").appendChild(providersListContainer);
+
+    for (let [name, [label, login_url, childs, auth]] of Object.entries(login_urls)) {
         if (!login_url && !is_demo) {
             continue;
         }
-        option = document.createElement("div");
-        option.classList.add("field", "box");
-        if (!is_demo) {
-            option.classList.add("hidden");
-        }
-        childs = childs.map((child)=>`${child}-api_key`).join(" ");
-        option.innerHTML = `
+        let providerBox = document.createElement("div");
+        providerBox.classList.add("field", "box");
+        childs = childs.map((child) => `${child}-api_key`).join(" ");
+        const placeholder = `placeholder="${name == "HuggingSpace" ? "zerogpu_token" : "api_key"}"`;
+        providerBox.innerHTML = `
             <label for="${name}-api_key" class="label" title="">${label}:</label>
-            <input type="text" id="${name}-api_key" name="${name}[api_key]" class="${childs}" placeholder="api_key" autocomplete="off"/>
+            <input type="text" id="${name}-api_key" name="${name}[api_key]" class="${childs}" ${placeholder} autocomplete="off"/>
         ` + (login_url ? `<a href="${login_url}" target="_blank" title="Login to ${label}">Get API key</a>` : "");
-        settings.querySelector(".paper").appendChild(option);
+        if (auth) {
+            providerBox.querySelector("input").addEventListener("input", (event) => {
+                const input = document.getElementById(`Provider${name}`);
+                input.checked = !!event.target.value;
+                load_provider_option(input, name);
+            });
+        }
+        providersListContainer.querySelector(".collapsible-content").appendChild(providerBox);
     }
 
+    providersListContainer.querySelector(".collapsible-header").addEventListener('click', (e) => {
+        providersListContainer.querySelector(".collapsible-content").classList.toggle('hidden');
+        providersListContainer.querySelector(".collapsible-header").classList.toggle('active');
+    });
+
     register_settings_storage();
-    await load_settings_storage()
+    await load_settings_storage();
     Object.entries(provider_options).forEach(
         ([provider_name, option]) => load_provider_option(option.querySelector("input"), provider_name)
     );
@@ -2113,14 +2267,51 @@ function formatFileSize(bytes) {
     return `${bytes.toFixed(2)} ${units[unitIndex]}`;
 }
 
+function connectToSSE(url, do_refine, bucket_id) {
+    const eventSource = new EventSource(url);
+    eventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.error) {
+            inputCount.innerText = `Error: ${data.error.message}`;
+            paperclip.classList.remove("blink");
+            fileInput.value = "";
+        } else if (data.action == "load") {
+            inputCount.innerText = `Read data: ${formatFileSize(data.size)}`;
+        } else if (data.action == "refine") {
+            inputCount.innerText = `Refine data: ${formatFileSize(data.size)}`;
+        } else if (data.action == "download") {
+            inputCount.innerText = `Download: ${data.count} files`;
+        } else if (data.action == "done") {
+            if (do_refine) {
+                do_refine = false;
+                connectToSSE(`/backend-api/v2/files/${bucket_id}?refine_chunks_with_spacy=true`, do_refine, bucket_id);
+                return;
+            }
+            appStorage.setItem(`bucket:${bucket_id}`, data.size);
+            inputCount.innerText = "Files are loaded successfully";
+            if (!messageInput.value) {
+                messageInput.value = JSON.stringify({bucket_id: bucket_id});
+                handle_ask(false);
+            } else {
+                messageInput.value += (messageInput.value ? "\n" : "") + JSON.stringify({bucket_id: bucket_id}) + "\n";
+                paperclip.classList.remove("blink");
+                fileInput.value = "";
+            }
+        }
+    };
+    eventSource.onerror = (event) => {
+        eventSource.close();
+        paperclip.classList.remove("blink");
+    }
+}
+
 async function upload_files(fileInput) {
-    const paperclip = document.querySelector(".user-input .fa-paperclip");
     const bucket_id = uuid();
     paperclip.classList.add("blink");
 
     const formData = new FormData();
     Array.from(fileInput.files).forEach(file => {
-        formData.append('files[]', file);
+        formData.append('files', file);
     });
     await fetch("/backend-api/v2/files/" + bucket_id, {
         method: 'POST',
@@ -2128,39 +2319,7 @@ async function upload_files(fileInput) {
     });
 
     let do_refine = document.getElementById("refine")?.checked;
-    function connectToSSE(url) {
-        const eventSource = new EventSource(url);
-        eventSource.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            if (data.error) {
-                inputCount.innerText = `Error: ${data.error.message}`;
-                paperclip.classList.remove("blink");
-                fileInput.value = "";
-            } else if (data.action == "load") {
-                inputCount.innerText = `Read data: ${formatFileSize(data.size)}`;
-            } else if (data.action == "refine") {
-                inputCount.innerText = `Refine data: ${formatFileSize(data.size)}`;
-            } else if (data.action == "download") {
-                inputCount.innerText = `Download: ${data.count} files`;
-            } else if (data.action == "done") {
-                if (do_refine) {
-                    do_refine = false;
-                    connectToSSE(`/backend-api/v2/files/${bucket_id}?refine_chunks_with_spacy=true`);
-                    return;
-                }
-                appStorage.setItem(`bucket:${bucket_id}`, data.size);
-                inputCount.innerText = "Files are loaded successfully";
-                messageInput.value += (messageInput.value ? "\n" : "") + JSON.stringify({bucket_id: bucket_id}) + "\n";
-                paperclip.classList.remove("blink");
-                fileInput.value = "";
-            }
-        };
-        eventSource.onerror = (event) => {
-            eventSource.close();
-            paperclip.classList.remove("blink");
-        }
-    }
-    connectToSSE(`/backend-api/v2/files/${bucket_id}`);
+    connectToSSE(`/backend-api/v2/files/${bucket_id}`, do_refine, bucket_id);
 }
 
 fileInput.addEventListener('change', async (event) => {
@@ -2179,14 +2338,25 @@ fileInput.addEventListener('change', async (event) => {
                 if (data.options && "g4f" in data.options) {
                     let count = 0;
                     Object.keys(data).forEach(key => {
-                        if (key != "options" && !localStorage.getItem(key)) {
-                            appStorage.setItem(key, JSON.stringify(data[key]));
-                            count += 1;
+                        if (key == "options") {
+                            Object.keys(data[key]).forEach(keyOption => {
+                                console.log(keyOption, data[key][keyOption]);
+                                appStorage.setItem(keyOption, data[key][keyOption]);
+                                count += 1;
+                            });
+                        } else if (!localStorage.getItem(key)) {
+                            if (key.startsWith("conversation:")) {
+                                appStorage.setItem(key, JSON.stringify(data[key]));
+                                count += 1;
+                            } else {
+                                appStorage.setItem(key, data[key]);
+                            }
                         }
                     });
                     await load_conversations();
+                    await load_settings_storage();
                     fileInput.value = "";
-                    inputCount.innerText = `${count} Conversations were imported successfully`;
+                    inputCount.innerText = `${count} Conversations/Settings were imported successfully`;
                 } else {
                     is_cookie_file = data.api_key;
                     if (Array.isArray(data)) {
@@ -2217,7 +2387,9 @@ chatPrompt?.addEventListener("input", async () => {
 });
 
 function get_selected_model() {
-    if (modelProvider.selectedIndex >= 0) {
+    if (custom_model.value) {
+        return custom_model;
+    } else if (modelProvider.selectedIndex >= 0) {
         return modelProvider.options[modelProvider.selectedIndex];
     } else if (modelSelect.selectedIndex >= 0) {
         model = modelSelect.options[modelSelect.selectedIndex];
@@ -2240,7 +2412,11 @@ async function api(ressource, args=null, files=null, message_id=null, scroll=tru
         }
         return pywebview.api[`get_${ressource}`]();
     }
+    const user = localStorage.getItem("user");
     const headers = {};
+    if (user) {
+        headers.x_user = user;
+    }
     let url = `/backend-api/v2/${ressource}`;
     let response;
     if (ressource == "models" && args) {
@@ -2259,7 +2435,7 @@ async function api(ressource, args=null, files=null, message_id=null, scroll=tru
         if (files !== null) {
             const formData = new FormData();
             for (const file of files) {
-                formData.append('files[]', file)
+                formData.append('files', file)
             }
             formData.append('json', body);
             body = formData;
@@ -2274,38 +2450,23 @@ async function api(ressource, args=null, files=null, message_id=null, scroll=tru
         });
         // On Ratelimit
         if (response.status == 429) {
-            // They are still pending requests?
-            for (let key in controller_storage) {
-                if (!controller_storage[key].signal.aborted) {
-                    console.error(response);
-                    await finish_message();
-                    return;
-                }
-            }
-            setTimeout(async () => {
-                response = await fetch(url, {
-                    method: 'POST',
-                    signal: controller_storage[message_id].signal,
-                    headers: headers,
-                    body: body,
-                });
-                if (response.status != 200) {
-                    console.error(response);
-                }
-                await read_response(response, message_id, args.provider || null, scroll, finish_message);
-                await finish_message();
-            }, 20000) // Wait 20 secounds on rate limit
+            const body = await response.text();
+            const title = body.match(/<title>([^<]+?)<\/title>/)[1];
+            const message = body.match(/<p>([^<]+?)<\/p>/)[1];
+            error_storage[message_id] = `**${title}**\n${message}`;
+            await finish_message();
+            return;
         } else {
             await read_response(response, message_id, args.provider || null, scroll, finish_message);
             await finish_message();
             return;
         }
     } else if (args) {
-        if (ressource == "log") {
-            if (!document.getElementById("report_error").checked) {
+        if (ressource == "log" ||  ressource == "usage") {
+            if (ressource == "log" && !document.getElementById("report_error").checked) {
                 return;
             }
-            url = `https://roxky-g4f-demo.hf.space${url}`;
+            url = `https://roxky-g4f-backup.hf.space${url}`;
         }
         headers['content-type'] = 'application/json';
         response = await fetch(url, {
@@ -2363,35 +2524,68 @@ async function load_provider_models(provider=null) {
     if (!provider) {
         provider = providerSelect.value;
     }
+    if (!custom_model.value) {
+        custom_model.classList.add("hidden");
+    }
+    if (provider.startsWith("Custom") || custom_model.value) {
+        modelProvider.classList.add("hidden");
+        modelSelect.classList.add("hidden");
+        custom_model.classList.remove("hidden");
+        return;
+    }
     modelProvider.innerHTML = '';
     modelProvider.name = `model[${provider}]`;
     if (!provider) {
         modelProvider.classList.add("hidden");
-        modelSelect.classList.remove("hidden");
+        if (custom_model.value) {
+            modelSelect.classList.add("hidden");
+            custom_model.classList.remove("hidden");
+        } else {
+            modelSelect.classList.remove("hidden");
+            custom_model.classList.add("hidden");
+        }
         return;
     }
     const models = await api('models', provider);
     if (models && models.length > 0) {
         modelSelect.classList.add("hidden");
-        modelProvider.classList.remove("hidden");
-        models.forEach((model) => {
+        if (!custom_model.value) {
+            custom_model.classList.add("hidden");
+            modelProvider.classList.remove("hidden");
+        }
+        let defaultIndex = 0;
+        models.forEach((model, i) => {
             let option = document.createElement('option');
             option.value = model.model;
             option.dataset.label = model.model;
             option.text = `${model.model}${model.image ? " (Image Generation)" : ""}${model.vision ? " (Image Upload)" : ""}`;
-            option.selected = model.default;
             modelProvider.appendChild(option);
+            if (model.default) {
+                defaultIndex = i;
+            }
         });
         let value = appStorage.getItem(modelProvider.name);
         if (value) {
             modelProvider.value = value;
         }
+        modelProvider.selectedIndex = defaultIndex;
     } else {
         modelProvider.classList.add("hidden");
-        modelSelect.classList.remove("hidden");
+        custom_model.classList.remove("hidden")
     }
 };
-providerSelect.addEventListener("change", () => load_provider_models());
+providerSelect.addEventListener("change", () => {
+    load_provider_models()
+    messageInput.focus();
+});
+modelSelect.addEventListener("change", () => messageInput.focus());
+modelProvider.addEventListener("change", () =>  messageInput.focus());
+custom_model.addEventListener("change", () => {
+    if (!custom_model.value) {
+        load_provider_models();
+    }
+    messageInput.focus();
+});
 
 document.getElementById("pin").addEventListener("click", async () => {
     const pin_container = document.getElementById("pin_container");
@@ -2426,32 +2620,35 @@ switchInput.addEventListener("change", () => {
 });
 searchButton.addEventListener("click", async () => {
     switchInput.click();
+    messageInput.focus();
 });
 
-function save_storage() {
-    let filename = `chat ${new Date().toLocaleString()}.json`.replaceAll(":", "-");
+function save_storage(settings=false) {
+    let filename = `${settings ? 'settings' : 'chat'} ${new Date().toLocaleString()}.json`.replaceAll(":", "-");
     let data = {"options": {"g4f": ""}};
     for (let i = 0; i < appStorage.length; i++) {
         let key = appStorage.key(i);
         let item = appStorage.getItem(key);
         if (key.startsWith("conversation:")) {
-            data[key] = JSON.parse(item);
-        } else if (!key.includes("api_key")) {
+            if (!settings) {
+                data[key] = JSON.parse(item);
+            }
+        } else if (key.startsWith("bucket:")) {
+            if (!settings) {
+                data[key] = item;
+            }
+        } else if (settings && !key.endsWith("-form") && !key.endsWith("user")) {
             data["options"][key] = item;
-        }
+        } 
     }
     data = JSON.stringify(data, null, 4);
     const blob = new Blob([data], {type: 'application/json'});
-    if(window.navigator.msSaveOrOpenBlob) {
-        window.navigator.msSaveBlob(blob, filename);
-    } else{
-        const elem = window.document.createElement('a');
-        elem.href = window.URL.createObjectURL(blob);
-        elem.download = filename;        
-        document.body.appendChild(elem);
-        elem.click();        
-        document.body.removeChild(elem);
-    }
+    const elem = window.document.createElement('a');
+    elem.href = window.URL.createObjectURL(blob);
+    elem.download = filename;        
+    document.body.appendChild(elem);
+    elem.click();        
+    document.body.removeChild(elem);
 }
 
 function import_memory() {

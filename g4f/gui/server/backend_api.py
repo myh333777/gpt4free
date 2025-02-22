@@ -68,14 +68,15 @@ class Backend_Api(Api):
                 app=app,
                 default_limits=["200 per day", "50 per hour"],
                 storage_uri="memory://",
-                auto_check=False
+                auto_check=False,
+                strategy="moving-window",
             )
 
         if has_flask_limiter and app.demo:
             @app.route('/', methods=['GET'])
             @limiter.exempt
             def home():
-                return render_template('demo.html')
+                return render_template('demo.html', backend_url=os.environ.get("G4F_BACKEND_URL", ""))
         else:
             @app.route('/', methods=['GET'])
             def home():
@@ -115,7 +116,7 @@ class Backend_Api(Api):
             }
             for model, providers in models.demo_models.values()]
 
-        def handle_conversation():
+        def handle_conversation(limiter_check: callable = None):
             """
             Handles conversation requests and streams responses back.
 
@@ -123,9 +124,9 @@ class Backend_Api(Api):
                 Response: A Flask response object for streaming.
             """
             kwargs = {}
-            if "files[]" in request.files:
+            if "files" in request.files:
                 images = []
-                for file in request.files.getlist('files[]'):
+                for file in request.files.getlist('files'):
                     if file.filename != '' and is_allowed_extension(file.filename):
                         images.append((to_image(file.stream, file.filename.endswith('.svg')), file.filename))
                 kwargs['images'] = images
@@ -134,14 +135,18 @@ class Backend_Api(Api):
             else:
                 json_data = request.json
 
-            if app.demo and json_data.get("provider") not in ["Custom", "Feature"]:
+            if app.demo and json_data.get("provider") not in ["Custom", "Feature", "HuggingFace", "HuggingSpace", "HuggingChat", "G4F", "PollinationsAI"]:
                 model = json_data.get("model")
                 if model != "default" and model in models.demo_models:
                     json_data["provider"] = random.choice(models.demo_models[model][1])
                 else:
-                    json_data["model"] = models.demo_models["default"][0].name
+                    if not model or model == "default":
+                        json_data["model"] = models.demo_models["default"][0].name
                     json_data["provider"] = random.choice(models.demo_models["default"][1])
-
+            if limiter_check is not None and json_data.get("provider") in ["Feature"]:
+                limiter_check()
+            if "images" in json_data:
+                kwargs["images"] = json_data["images"]
             kwargs = self._prepare_conversation_kwargs(json_data, kwargs)
             return self.app.response_class(
                 self._create_response_stream(
@@ -155,10 +160,9 @@ class Backend_Api(Api):
 
         if has_flask_limiter and app.demo:
             @app.route('/backend-api/v2/conversation', methods=['POST'])
-            @limiter.limit("4 per minute") # 1 request in 15 seconds
+            @limiter.limit("2 per minute")
             def _handle_conversation():
-                limiter.check()
-                return handle_conversation()
+                return handle_conversation(limiter.check)
         else:
             @app.route('/backend-api/v2/conversation', methods=['POST'])
             def _handle_conversation():
@@ -269,15 +273,17 @@ class Backend_Api(Api):
                         response = iter_run_tools(ChatCompletion.create, **parameters)
                         cache_dir.mkdir(parents=True, exist_ok=True)
                         with cache_file.open("w") as f:
-                            f.write(response)
+                            for chunk in response:
+                                f.write(str(chunk))
                 else:
                     response = iter_run_tools(ChatCompletion.create, **parameters)
 
                 if do_filter_markdown:
-                    return Response(filter_markdown(response, do_filter_markdown), mimetype='text/plain')
+                    return Response(filter_markdown("".join([str(chunk) for chunk in response]), do_filter_markdown), mimetype='text/plain')
                 def cast_str():
                     for chunk in response:
-                        yield str(chunk)
+                        if not isinstance(chunk, Exception):
+                            yield str(chunk)
                 return Response(cast_str(), mimetype='text/plain')
             except Exception as e:
                 logger.exception(e)
@@ -323,7 +329,7 @@ class Backend_Api(Api):
             bucket_dir = get_bucket_dir(bucket_id)
             os.makedirs(bucket_dir, exist_ok=True)
             filenames = []
-            for file in request.files.getlist('files[]'):
+            for file in request.files.getlist('files'):
                 try:
                     filename = secure_filename(file.filename)
                     if supports_filename(filename):
@@ -363,7 +369,7 @@ class Backend_Api(Api):
                 return jsonify({"error": {"message": f"Error uploading file: {str(e)}"}}), 500
 
         @app.route('/backend-api/v2/upload_cookies', methods=['POST'])
-        def upload_cookies(self):
+        def upload_cookies():
             file = None
             if "file" in request.files:
                 file = request.files['file']

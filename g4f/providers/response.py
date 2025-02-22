@@ -19,7 +19,6 @@ def quote_url(url: str) -> str:
 
 def quote_title(title: str) -> str:
     if title:
-        title = title.strip()
         title = " ".join(title.split())
         return title.replace('[', '').replace(']', '')
     return ""
@@ -71,7 +70,7 @@ def format_images_markdown(images: Union[str, list], alt: str, preview: Union[st
 class ResponseType:
     @abstractmethod
     def __str__(self) -> str:
-        pass
+        raise NotImplementedError
 
 class JsonMixin:
     def __init__(self, **kwargs) -> None:
@@ -88,45 +87,64 @@ class JsonMixin:
     def reset(self):
         self.__dict__ = {}
 
-class FinishReason(ResponseType, JsonMixin):
+class RawResponse(ResponseType, JsonMixin):
+    pass
+
+class HiddenResponse(ResponseType):
+    def __str__(self) -> str:
+        return ""
+
+class FinishReason(JsonMixin, HiddenResponse):
     def __init__(self, reason: str) -> None:
         self.reason = reason
 
-    def __str__(self) -> str:
-        return ""
-
-class ToolCalls(ResponseType):
+class ToolCalls(HiddenResponse):
     def __init__(self, list: list):
         self.list = list
-
-    def __str__(self) -> str:
-        return ""
 
     def get_list(self) -> list:
         return self.list
 
-class Usage(ResponseType, JsonMixin):
-    def __str__(self) -> str:
-        return ""
+class Usage(JsonMixin, HiddenResponse):
+    pass
 
-class AuthResult(JsonMixin):
-    def __str__(self) -> str:
-        return ""
+class AuthResult(JsonMixin, HiddenResponse):
+    pass
 
-class TitleGeneration(ResponseType):
+class TitleGeneration(HiddenResponse):
     def __init__(self, title: str) -> None:
         self.title = title
 
-    def __str__(self) -> str:
-        return ""
+class DebugResponse(HiddenResponse):
+    def __init__(self, log: str) -> None:
+        self.log = log
 
 class Reasoning(ResponseType):
-    def __init__(self, token: str = None, status: str = None) -> None:
+    def __init__(
+            self,
+            token: str = None,
+            status: str = None,
+            is_thinking: str = None
+        ) -> None:
         self.token = token
         self.status = status
+        self.is_thinking = is_thinking
 
     def __str__(self) -> str:
-        return f"{self.status}\n" if self.token is None else self.token
+        if self.is_thinking is not None:
+            return self.is_thinking
+        if self.token is not None:
+            return self.token
+        if self.status is not None:
+            return f"{self.status}\n"
+        return ""
+
+    def get_dict(self):
+        if self.is_thinking is None:
+            if self.status is None:
+                return {"token": self.token}
+            {"token": self.token, "status": self.status}
+        return {"token": self.token, "status": self.status, "is_thinking": self.is_thinking}
 
 class Sources(ResponseType):
     def __init__(self, sources: list[dict[str, str]]) -> None:
@@ -135,6 +153,7 @@ class Sources(ResponseType):
             self.add_source(source)
 
     def add_source(self, source: dict[str, str]):
+        source = source if isinstance(source, dict) else {"url": source}
         url = source.get("url", source.get("link", None))
         if url is not None:
             url = re.sub(r"[&?]utm_source=.+", "", url)
@@ -154,13 +173,10 @@ class BaseConversation(ResponseType):
 class JsonConversation(BaseConversation, JsonMixin):
     pass
 
-class SynthesizeData(ResponseType, JsonMixin):
+class SynthesizeData(HiddenResponse, JsonMixin):
     def __init__(self, provider: str, data: dict):
         self.provider = provider
         self.data = data
-
-    def __str__(self) -> str:
-        return ""
 
 class RequestLogin(ResponseType):
     def __init__(self, label: str, login_url: str) -> None:
@@ -197,6 +213,16 @@ class ImagePreview(ImageResponse):
     def to_string(self):
         return super().__str__()
 
+class PreviewResponse(HiddenResponse):
+    def __init__(self, data: str):
+        self.data = data
+
+    def to_string(self):
+        return self.data
+
 class Parameters(ResponseType, JsonMixin):
     def __str__(self):
         return ""
+
+class ProviderInfo(JsonMixin, HiddenResponse):
+    pass

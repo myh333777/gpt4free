@@ -89,14 +89,14 @@ def scrape_text(html: str, max_words: int = None, add_source=True, count_images:
         if select:
             select.extract()
 
-    image_select = "img[alt][src^=http]:not([alt=''])"
+    image_select = "img[alt][src^=http]:not([alt='']):not(.avatar):not([width])"
     image_link_select = f"a:has({image_select})"
     yield_words = []
-    for paragraph in soup.select(f"h1, h2, h3, h4, h5, h6, p, table:not(:has(p)), ul:not(:has(p)), {image_link_select}"):
+    for paragraph in soup.select(f"h1, h2, h3, h4, h5, h6, p, pre, table:not(:has(p)), ul:not(:has(p)), {image_link_select}"):
         if count_images > 0:
             image = paragraph.select_one(image_select)
             if image:
-                title = paragraph.get("title") or paragraph.text
+                title = str(paragraph.get("title", paragraph.text))
                 if title:
                     yield f"!{format_link(image['src'], title)}\n"
                     if max_words is not None:
@@ -192,8 +192,12 @@ async def search(query: str, max_results: int = 5, max_words: int = 2500, backen
         return SearchResults(formatted_results, used_words)
 
 async def do_search(prompt: str, query: str = None, instructions: str = DEFAULT_INSTRUCTIONS, **kwargs) -> str:
+    if instructions and instructions in prompt:
+        return prompt # We have already added search results
+    if prompt.startswith("##") and query is None:
+        return prompt # We have no search query
     if query is None:
-        query = spacy_get_keywords(prompt)
+        query = prompt.strip().splitlines()[0] # Use the first line as the search query
     json_bytes = json.dumps({"query": query, **kwargs}, sort_keys=True).encode(errors="ignore")
     md5_hash = hashlib.md5(json_bytes).hexdigest()
     bucket_dir: Path = Path(get_cookies_dir()) / ".scrape_cache" / f"web_search" / f"{datetime.date.today()}"
@@ -233,7 +237,7 @@ def get_search_message(prompt: str, raise_search_exceptions=False, **kwargs) -> 
     except (DuckDuckGoSearchException, MissingRequirementsError) as e:
         if raise_search_exceptions:
             raise e
-        debug.log(f"Couldn't do web search: {e.__class__.__name__}: {e}")
+        debug.error(f"Couldn't do web search: {e.__class__.__name__}: {e}")
         return prompt
 
 def spacy_get_keywords(text: str):

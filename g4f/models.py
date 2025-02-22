@@ -5,22 +5,18 @@ from dataclasses import dataclass
 from .Provider import IterListProvider, ProviderType
 from .Provider import (
     ### no auth required ###
-    AIChatFree,
-    AIUncensored,
-    AutonomousAI,
     Blackbox,
-    CablyAI,
+    BlackboxAPI,
     ChatGLM,
-    ChatGpt,
     ChatGptEs,
-    ChatGptt,
     Cloudflare,
     Copilot,
-    DarkAI,
     DDG,
     DeepInfraChat,
     HuggingSpace,
-    GPROChat,
+    G4F,
+    Janus_Pro_7B,
+    Glider,
     ImageLabs,
     Jmuz,
     Liaobots,
@@ -29,6 +25,7 @@ from .Provider import (
     PerplexityLabs,
     Pi,
     PollinationsAI,
+    PollinationsImage,
     TeachAnything,
     Yqcloud,
     
@@ -84,14 +81,10 @@ default = Model(
         Copilot,
         DeepInfraChat,
         ChatGptEs,
-        ChatGptt,
         PollinationsAI,
-        Jmuz,
-        CablyAI,
         OIVSCode,
-        DarkAI,
-        AIUncensored,
         OpenaiChat,
+        Jmuz,
         Cloudflare,
     ])
 )
@@ -101,6 +94,8 @@ default_vision = Model(
     base_provider = "",
     best_provider = IterListProvider([
         Blackbox,
+        OIVSCode,
+        DeepInfraChat,
         PollinationsAI,
         HuggingSpace,
         GeminiPro,
@@ -111,36 +106,29 @@ default_vision = Model(
     ], shuffle=False)
 )
 
-############
-### Text ###
-############
+###################
+### Text/Vision ###
+###################
 
 ### OpenAI ###
-# gpt-3.5
-gpt_35_turbo = Model(
-    name          = 'gpt-3.5-turbo',
-    base_provider = 'OpenAI',
-    best_provider = IterListProvider([DarkAI, ChatGpt])
-)
-
 # gpt-4
 gpt_4 = Model(
     name          = 'gpt-4',
     base_provider = 'OpenAI',
-    best_provider = IterListProvider([DDG, Blackbox, Jmuz, ChatGptEs, ChatGptt, PollinationsAI, Yqcloud, Copilot, OpenaiChat, Liaobots, Mhystical])
+    best_provider = IterListProvider([Blackbox, DDG, Jmuz, ChatGptEs, PollinationsAI, Yqcloud, Copilot, OpenaiChat, Liaobots, Mhystical])
 )
 
 # gpt-4o
 gpt_4o = VisionModel(
     name          = 'gpt-4o',
     base_provider = 'OpenAI',
-    best_provider = IterListProvider([Blackbox, ChatGptt, Jmuz, ChatGptEs, PollinationsAI, DarkAI, Copilot, ChatGpt, Liaobots, OpenaiChat])
+    best_provider = IterListProvider([Blackbox, Jmuz, ChatGptEs, PollinationsAI, Copilot, Liaobots, OpenaiChat])
 )
 
 gpt_4o_mini = Model(
     name          = 'gpt-4o-mini',
     base_provider = 'OpenAI',
-    best_provider = IterListProvider([DDG, ChatGptEs, ChatGptt, Jmuz, PollinationsAI, OIVSCode, ChatGpt, Liaobots, OpenaiChat])
+    best_provider = IterListProvider([DDG, ChatGptEs, Jmuz, PollinationsAI, OIVSCode, Liaobots, OpenaiChat])
 )
 
 # o1
@@ -160,6 +148,13 @@ o1_mini = Model(
     name          = 'o1-mini',
     base_provider = 'OpenAI',
     best_provider = Liaobots
+)
+
+# o3
+o3_mini = Model(
+    name          = 'o3-mini',
+    base_provider = 'OpenAI',
+    best_provider = IterListProvider([DDG, Blackbox])
 )
 
 ### GigaChat ###
@@ -199,13 +194,13 @@ llama_3_70b = Model(
 llama_3_1_8b = Model(
     name          = "llama-3.1-8b",
     base_provider = "Meta Llama",
-    best_provider = IterListProvider([Blackbox, DeepInfraChat, Jmuz, PollinationsAI, Cloudflare, PerplexityLabs])
+    best_provider = IterListProvider([Blackbox, DeepInfraChat, Glider, Jmuz, PollinationsAI, Cloudflare])
 )
 
 llama_3_1_70b = Model(
     name          = "llama-3.1-70b",
     base_provider = "Meta Llama",
-    best_provider = IterListProvider([DDG, Jmuz, Blackbox, TeachAnything, DarkAI, PerplexityLabs])
+    best_provider = IterListProvider([Blackbox, Glider, Jmuz, TeachAnything])
 )
 
 llama_3_1_405b = Model(
@@ -221,42 +216,41 @@ llama_3_2_1b = Model(
     best_provider = Cloudflare
 )
 
+llama_3_2_3b = Model(
+    name          = "llama-3.2-3b",
+    base_provider = "Meta Llama",
+    best_provider = Glider
+)
+
 llama_3_2_11b = VisionModel(
     name          = "llama-3.2-11b",
     base_provider = "Meta Llama",
     best_provider = IterListProvider([Jmuz, HuggingChat, HuggingFace])
 )
 
-llama_3_2_70b = Model(
-    name          = "llama-3.2-70b",
-    base_provider = "Meta Llama",
-    best_provider = AutonomousAI
-)
-
 llama_3_2_90b = Model(
     name          = "llama-3.2-90b",
     base_provider = "Meta Llama",
-    best_provider = IterListProvider([Jmuz, AutonomousAI])
+    best_provider = IterListProvider([DeepInfraChat, Jmuz])
 )
 
 # llama 3.3
 llama_3_3_70b = Model(
     name          = "llama-3.3-70b",
     base_provider = "Meta Llama",
-    best_provider = IterListProvider([Blackbox, DeepInfraChat, PollinationsAI, AutonomousAI, Jmuz, HuggingChat, HuggingFace, PerplexityLabs])
+    best_provider = IterListProvider([DDG, Blackbox, DeepInfraChat, PollinationsAI, Jmuz, HuggingChat, HuggingFace])
 )
 
 ### Mistral ###
-mixtral_7b = Model(
-    name          = "mixtral-7b",
-    base_provider = "Mistral",
-    best_provider = Blackbox
-)
-
 mixtral_8x7b = Model(
     name          = "mixtral-8x7b",
     base_provider = "Mistral",
-    best_provider = IterListProvider([DDG, Jmuz])
+    best_provider = Jmuz
+)
+mixtral_8x22b = Model(
+    name          = "mixtral-8x22b",
+    base_provider = "Mistral",
+    best_provider = DeepInfraChat
 )
 
 mistral_nemo = Model(
@@ -265,19 +259,24 @@ mistral_nemo = Model(
     best_provider = IterListProvider([PollinationsAI, HuggingChat, HuggingFace])
 )
 
+mixtral_small_24b = Model(
+    name          = "mixtral-small-24b",
+    base_provider = "Mistral",
+    best_provider = DDG
+)
+
+mixtral_small_28b = Model(
+    name          = "mixtral-small-28b",
+    base_provider = "Mistral",
+    best_provider = IterListProvider([Blackbox, BlackboxAPI, DeepInfraChat])
+)
+
 ### NousResearch ###
 hermes_2_dpo = Model(
     name          = "hermes-2-dpo",
     base_provider = "NousResearch",
-    best_provider = Blackbox
+    best_provider = IterListProvider([Blackbox, BlackboxAPI])
 )
-
-hermes_3 = Model(
-    name          = "hermes-3",
-    base_provider = "NousResearch",
-    best_provider = IterListProvider([AutonomousAI, AIUncensored])
-)
-
 
 ### Microsoft ###
 # phi
@@ -285,6 +284,12 @@ phi_3_5_mini = Model(
     name          = "phi-3.5-mini",
     base_provider = "Microsoft",
     best_provider = HuggingChat
+)
+
+phi_4 = Model(
+    name          = "phi-4",
+    base_provider = "Microsoft",
+    best_provider = DeepInfraChat
 )
 
 # wizardlm
@@ -303,7 +308,7 @@ wizardlm_2_8x22b = Model(
 ### Google DeepMind ###
 # gemini
 gemini = Model(
-    name          = 'gemini',
+    name          = 'gemini-2.0',
     base_provider = 'Google',
     best_provider = Gemini
 )
@@ -319,32 +324,26 @@ gemini_exp = Model(
 gemini_1_5_flash = Model(
     name          = 'gemini-1.5-flash',
     base_provider = 'Google DeepMind',
-    best_provider = IterListProvider([Blackbox, Jmuz, Gemini, GeminiPro, Liaobots])
+    best_provider = IterListProvider([Blackbox, Jmuz, GeminiPro, Liaobots])
 )
 
 gemini_1_5_pro = Model(
     name          = 'gemini-1.5-pro',
     base_provider = 'Google DeepMind',
-    best_provider = IterListProvider([Blackbox, Jmuz, GPROChat, AIChatFree, Gemini, GeminiPro, Liaobots])
+    best_provider = IterListProvider([Blackbox, Jmuz, GeminiPro, Liaobots])
 )
 
 # gemini-2.0
 gemini_2_0_flash = Model(
     name          = 'gemini-2.0-flash',
     base_provider = 'Google DeepMind',
-    best_provider = IterListProvider([GeminiPro, Liaobots])
+    best_provider = IterListProvider([Blackbox, PollinationsAI, GeminiPro, Liaobots])
 )
 
 gemini_2_0_flash_thinking = Model(
     name          = 'gemini-2.0-flash-thinking',
     base_provider = 'Google DeepMind',
     best_provider = Liaobots
-)
-
-gemma_2_27b = Model(
-    name          = 'gemma-2-27b',
-    base_provider = 'Google DeepMind',
-    best_provider = HuggingFace
 )
 
 ### Anthropic ###
@@ -372,7 +371,7 @@ claude_3_opus = Model(
 claude_3_5_sonnet = Model(
     name          = 'claude-3.5-sonnet',
     base_provider = 'Anthropic',
-    best_provider = IterListProvider([Blackbox, Jmuz, Liaobots])
+    best_provider = IterListProvider([Jmuz, Liaobots])
 )
 
 ### Reka AI ###
@@ -423,7 +422,7 @@ qwen_1_5_7b = Model(
 qwen_2_72b = Model(
     name = 'qwen-2-72b',
     base_provider = 'Qwen',
-    best_provider = HuggingSpace
+    best_provider = IterListProvider([DeepInfraChat, HuggingSpace])
 )
 qwen_2_vl_7b = VisionModel(
     name = "qwen-2-vl-7b",
@@ -433,21 +432,25 @@ qwen_2_vl_7b = VisionModel(
 qwen_2_5_72b = Model(
     name = 'qwen-2.5-72b',
     base_provider = 'Qwen',
-    best_provider = IterListProvider([DeepInfraChat, PollinationsAI, Jmuz])
+    best_provider = Jmuz
 )
 qwen_2_5_coder_32b = Model(
     name = 'qwen-2.5-coder-32b',
     base_provider = 'Qwen',
-    best_provider = IterListProvider([DeepInfraChat, PollinationsAI, AutonomousAI, Jmuz, HuggingChat])
+    best_provider = IterListProvider([PollinationsAI, Jmuz, HuggingChat])
+)
+qwen_2_5_1m = Model(
+    name = 'qwen-2.5-1m-demo',
+    base_provider = 'Qwen',
+    best_provider = HuggingSpace
 )
 
-# qwq/qvq
+### qwq/qvq ###
 qwq_32b = Model(
     name = 'qwq-32b',
     base_provider = 'Qwen',
-    best_provider = IterListProvider([Blackbox, DeepInfraChat, Jmuz, HuggingChat])
+    best_provider = IterListProvider([Blackbox, BlackboxAPI, Jmuz, HuggingChat])
 )
-
 qvq_72b = VisionModel(
     name = 'qvq-72b',
     base_provider = 'Qwen',
@@ -465,13 +468,25 @@ pi = Model(
 deepseek_chat = Model(
     name = 'deepseek-chat',
     base_provider = 'DeepSeek',
-    best_provider = IterListProvider([Blackbox, DeepInfraChat, Jmuz, PollinationsAI])
+    best_provider = IterListProvider([Blackbox, BlackboxAPI, Jmuz, PollinationsAI])
+)
+
+deepseek_v3 = Model(
+    name = 'deepseek-v3',
+    base_provider = 'DeepSeek',
+    best_provider = IterListProvider([Blackbox, BlackboxAPI, DeepInfraChat, Liaobots])
 )
 
 deepseek_r1 = Model(
     name = 'deepseek-r1',
     base_provider = 'DeepSeek',
-    best_provider = IterListProvider([Blackbox, Jmuz, PollinationsAI, HuggingChat, HuggingFace])
+    best_provider = IterListProvider([Blackbox, BlackboxAPI, DeepInfraChat, Glider, PollinationsAI, Jmuz, Liaobots, HuggingChat, HuggingFace])
+)
+
+janus_pro_7b = VisionModel(
+    name = Janus_Pro_7B.default_model,
+    base_provider = 'DeepSeek',
+    best_provider = IterListProvider([Janus_Pro_7B, G4F])
 )
 
 ### x.ai ###
@@ -482,14 +497,26 @@ grok_2 = Model(
 )
 
 ### Perplexity AI ### 
-sonar_online = Model(
-    name = 'sonar-online',
+sonar = Model(
+    name = 'sonar',
     base_provider = 'Perplexity AI',
     best_provider = PerplexityLabs
 )
 
-sonar_chat = Model(
-    name = 'sonar-chat',
+sonar_pro = Model(
+    name = 'sonar-pro',
+    base_provider = 'Perplexity AI',
+    best_provider = PerplexityLabs
+)
+
+sonar_reasoning = Model(
+    name = 'sonar-reasoning',
+    base_provider = 'Perplexity AI',
+    best_provider = PerplexityLabs
+)
+
+sonar_reasoning_pro = Model(
+    name = 'sonar-reasoning-pro',
     base_provider = 'Perplexity AI',
     best_provider = PerplexityLabs
 )
@@ -498,35 +525,14 @@ sonar_chat = Model(
 nemotron_70b = Model(
     name = 'nemotron-70b',
     base_provider = 'Nvidia',
-    best_provider = IterListProvider([DeepInfraChat, HuggingChat, HuggingFace])
-)
-
-### Liquid ### 
-lfm_40b = Model(
-    name = 'lfm-40b',
-    base_provider = 'Liquid',
-    best_provider = PerplexityLabs
+    best_provider = IterListProvider([HuggingChat, HuggingFace])
 )
 
 ### Databricks ### 
 dbrx_instruct = Model(
     name = 'dbrx-instruct',
     base_provider = 'Databricks',
-    best_provider = Blackbox
-)
-
-### PollinationsAI ### 
-p1 = Model(
-    name = 'p1',
-    base_provider = 'PollinationsAI',
-    best_provider = PollinationsAI
-)
-
-### CablyAI ### 
-cably_80b = Model(
-    name = 'cably-80b',
-    base_provider = 'CablyAI',
-    best_provider = CablyAI
+    best_provider = IterListProvider([Blackbox, BlackboxAPI, DeepInfraChat])
 )
 
 ### THUDM ### 
@@ -536,11 +542,52 @@ glm_4 = Model(
     best_provider = ChatGLM
 )
 
-### MiniMax
+### MiniMax ###
 mini_max = Model(
     name = "MiniMax",
     base_provider = "MiniMax",
     best_provider = HailuoAI
+)
+
+### 01-ai ###
+yi_34b = Model(
+    name = "yi-34b",
+    base_provider = "01-ai",
+    best_provider = DeepInfraChat
+)
+
+### Cognitive Computations ###
+dolphin_2_6 = Model(
+    name = "dolphin-2.6",
+    base_provider = "Cognitive Computations",
+    best_provider = DeepInfraChat
+)
+
+dolphin_2_9 = Model(
+    name = "dolphin-2.9",
+    base_provider = "Cognitive Computations",
+    best_provider = DeepInfraChat
+)
+
+### DeepInfra ###
+airoboros_70b = Model(
+    name = "airoboros-70b",
+    base_provider = "DeepInfra",
+    best_provider = DeepInfraChat
+)
+
+### Lizpreciatior ###
+lzlv_70b = Model(
+    name = "lzlv-70b",
+    base_provider = "Lizpreciatior",
+    best_provider = DeepInfraChat
+)
+
+### OpenBMB ###
+minicpm_2_5 = Model(
+    name = "minicpm-2.5",
+    base_provider = "OpenBMB",
+    best_provider = DeepInfraChat
 )
 
 ### Uncensored AI ### 
@@ -559,7 +606,7 @@ evil = Model(
 sdxl_turbo = ImageModel(
     name = 'sdxl-turbo',
     base_provider = 'Stability AI',
-    best_provider = IterListProvider([PollinationsAI, ImageLabs])
+    best_provider = IterListProvider([PollinationsImage, ImageLabs])
 )
 
 sd_3_5 = ImageModel(
@@ -572,25 +619,25 @@ sd_3_5 = ImageModel(
 flux = ImageModel(
     name = 'flux',
     base_provider = 'Black Forest Labs',
-    best_provider = IterListProvider([Blackbox, PollinationsAI, HuggingSpace])
+    best_provider = IterListProvider([Blackbox, PollinationsImage, HuggingSpace])
 )
 
 flux_pro = ImageModel(
     name = 'flux-pro',
     base_provider = 'Black Forest Labs',
-    best_provider = PollinationsAI
+    best_provider = PollinationsImage
 )
 
 flux_dev = ImageModel(
     name = 'flux-dev',
     base_provider = 'Black Forest Labs',
-    best_provider = IterListProvider([HuggingSpace, HuggingChat, HuggingFace])
+    best_provider = IterListProvider([PollinationsImage, HuggingSpace, HuggingChat, HuggingFace])
 )
 
 flux_schnell = ImageModel(
     name = 'flux-schnell',
     base_provider = 'Black Forest Labs',
-    best_provider = IterListProvider([HuggingSpace, HuggingChat, HuggingFace])
+    best_provider = IterListProvider([PollinationsImage, HuggingSpace, HuggingChat, HuggingFace])
 )
 
 
@@ -598,14 +645,14 @@ flux_schnell = ImageModel(
 dall_e_3 = ImageModel(
     name = 'dall-e-3',
     base_provider = 'OpenAI',
-    best_provider = IterListProvider([PollinationsAI, CopilotAccount, OpenaiAccount, MicrosoftDesigner, BingCreateImages])
+    best_provider = IterListProvider([PollinationsImage, CopilotAccount, OpenaiAccount, MicrosoftDesigner, BingCreateImages])
 )
 
 ### Midjourney ###
 midjourney = ImageModel(
     name = 'midjourney',
     base_provider = 'Midjourney',
-    best_provider = PollinationsAI
+    best_provider = PollinationsImage
 )
 
 class ModelUtils:
@@ -621,12 +668,6 @@ class ModelUtils:
         ############
 
         ### OpenAI ###
-        # gpt-3
-        'gpt-3': gpt_35_turbo,
-
-        # gpt-3.5
-        gpt_35_turbo.name: gpt_35_turbo,
-
         # gpt-4
         gpt_4.name: gpt_4,
         
@@ -638,6 +679,9 @@ class ModelUtils:
         o1.name: o1,
         o1_preview.name: o1_preview,
         o1_mini.name: o1_mini,
+        
+        # o3
+        o3_mini.name: o3_mini,
 
         ### Meta ###
         meta.name: meta,
@@ -656,25 +700,27 @@ class ModelUtils:
 
         # llama-3.2
         llama_3_2_1b.name: llama_3_2_1b,
+        llama_3_2_3b.name: llama_3_2_3b,
         llama_3_2_11b.name: llama_3_2_11b,
-        llama_3_2_70b.name: llama_3_2_70b,
         llama_3_2_90b.name: llama_3_2_90b,
         
         # llama-3.3
         llama_3_3_70b.name: llama_3_3_70b,
                 
         ### Mistral ###
-        mixtral_7b.name: mixtral_7b,
         mixtral_8x7b.name: mixtral_8x7b,
+        mixtral_8x22b.name: mixtral_8x22b,
         mistral_nemo.name: mistral_nemo,
+        mixtral_small_24b.name: mixtral_small_24b,
+        mixtral_small_28b.name: mixtral_small_28b,
 
         ### NousResearch ###
         hermes_2_dpo.name: hermes_2_dpo,
-        hermes_3.name: hermes_3,
                 
         ### Microsoft ###
         # phi
         phi_3_5_mini.name: phi_3_5_mini,
+        phi_4.name: phi_4,
         
         # wizardlm
         wizardlm_2_7b.name: wizardlm_2_7b,
@@ -682,14 +728,13 @@ class ModelUtils:
 
         ### Google ###
         ### Gemini
+        "gemini": gemini,
         gemini.name: gemini,
         gemini_exp.name: gemini_exp,
         gemini_1_5_pro.name: gemini_1_5_pro,
         gemini_1_5_flash.name: gemini_1_5_flash,
         gemini_2_0_flash.name: gemini_2_0_flash,
         gemini_2_0_flash_thinking.name: gemini_2_0_flash_thinking,
-        ### Gemma
-        gemma_2_27b.name: gemma_2_27b,
 
         ### Anthropic ###
         # claude 3
@@ -721,6 +766,7 @@ class ModelUtils:
         qwen_2_vl_7b.name: qwen_2_vl_7b,
         qwen_2_5_72b.name: qwen_2_5_72b,
         qwen_2_5_coder_32b.name: qwen_2_5_coder_32b,
+        qwen_2_5_1m.name: qwen_2_5_1m,
 
         # qwq/qvq
         qwq_32b.name: qwq_32b,
@@ -733,20 +779,30 @@ class ModelUtils:
         grok_2.name: grok_2,
 
         ### Perplexity AI ###
-        sonar_online.name: sonar_online,
-        sonar_chat.name: sonar_chat,
+        sonar.name: sonar,
+        sonar_pro.name: sonar_pro,
+        sonar_reasoning.name: sonar_reasoning,
+        sonar_reasoning_pro.name: sonar_reasoning_pro,
         
         ### DeepSeek ###
         deepseek_chat.name: deepseek_chat,
+        deepseek_v3.name: deepseek_v3,
         deepseek_r1.name: deepseek_r1,
 
         nemotron_70b.name: nemotron_70b, ### Nvidia ###
-        lfm_40b.name: lfm_40b, ### Liquid ### 
         dbrx_instruct.name: dbrx_instruct, ### Databricks ###
-        p1.name: p1, ### PollinationsAI ### 
-        cably_80b.name: cably_80b, ### CablyAI ###
         glm_4.name: glm_4, ### THUDM ###
-        mini_max.name: mini_max, ## MiniMax
+        mini_max.name: mini_max, ## MiniMax ###
+        yi_34b.name: yi_34b, ## 01-ai ###
+        
+        ### Cognitive Computations ###
+        dolphin_2_6.name: dolphin_2_6,
+        dolphin_2_9.name: dolphin_2_9,
+        
+        airoboros_70b.name: airoboros_70b, ### DeepInfra ###
+        lzlv_70b.name: lzlv_70b, ### Lizpreciatior ###
+        minicpm_2_5.name: minicpm_2_5, ### OpenBMB ###
+        
         evil.name: evil, ### Uncensored AI ###
         
         #############
@@ -770,24 +826,21 @@ class ModelUtils:
         midjourney.name: midjourney,
     }
 
+
 demo_models = {
-    gpt_4o.name: [gpt_4o, [PollinationsAI, Blackbox]],
-    "default": [llama_3_2_11b, [HuggingFaceAPI]],
+    "default": [llama_3_2_11b, [HuggingFace]],
     qwen_2_vl_7b.name: [qwen_2_vl_7b, [HuggingFaceAPI]],
-    qvq_72b.name: [qvq_72b, [HuggingSpace, HuggingFaceAPI]],
-    deepseek_r1.name: [deepseek_r1, [HuggingFace, HuggingFaceAPI]],
-    claude_3_haiku.name: [claude_3_haiku, [DDG, Jmuz]],
+    deepseek_r1.name: [deepseek_r1, [HuggingFace, PollinationsAI]],
+    janus_pro_7b.name: [janus_pro_7b, [HuggingSpace, G4F]],
     command_r.name: [command_r, [HuggingSpace]],
     command_r_plus.name: [command_r_plus, [HuggingSpace]],
     command_r7b.name: [command_r7b, [HuggingSpace]],
-    gemma_2_27b.name: [gemma_2_27b, [HuggingFaceAPI]],
-    qwen_2_72b.name: [qwen_2_72b, [HuggingSpace]],
     qwen_2_5_coder_32b.name: [qwen_2_5_coder_32b, [HuggingFace]],
     qwq_32b.name: [qwq_32b, [HuggingFace]],
     llama_3_3_70b.name: [llama_3_3_70b, [HuggingFace]],
     sd_3_5.name: [sd_3_5, [HuggingSpace, HuggingFace]],
-    flux_dev.name: [flux_dev, [HuggingSpace, HuggingFace]],
-    flux_schnell.name: [flux_schnell, [HuggingFace]],
+    flux_dev.name: [flux_dev, [PollinationsImage, HuggingSpace, HuggingFace, G4F]],
+    flux_schnell.name: [flux_schnell, [PollinationsImage, HuggingFace, HuggingSpace, G4F]],
 }
 
 # Create a list of all models and his providers
