@@ -7,42 +7,54 @@ import requests
 
 from ...typing import AsyncResult, Messages
 from ..base_provider import AsyncGeneratorProvider, ProviderModelMixin, format_prompt
-from ...errors import ModelNotFoundError, ModelNotSupportedError, ResponseError
+from ...errors import ModelNotSupportedError, ResponseError
 from ...requests import StreamSession, raise_for_status
-from ...providers.response import FinishReason
-from ...image import ImageResponse
+from ...providers.response import FinishReason, ImageResponse
+from ..helper import format_image_prompt, get_last_user_message
+from .models import default_model, default_image_model, model_aliases, text_models, image_models, vision_models
 from ... import debug
 
-from .HuggingChat import HuggingChat
-
-class HuggingFace(AsyncGeneratorProvider, ProviderModelMixin):
+class HuggingFaceInference(AsyncGeneratorProvider, ProviderModelMixin):
     url = "https://huggingface.co"
-    login_url = "https://huggingface.co/settings/tokens"
+    parent = "HuggingFace"
     working = True
-    supports_message_history = True
-    default_model = HuggingChat.default_model
-    default_image_model = HuggingChat.default_image_model
-    model_aliases = HuggingChat.model_aliases
-    extra_models = [
-        "meta-llama/Llama-3.2-11B-Vision-Instruct",
-        "nvidia/Llama-3.1-Nemotron-70B-Instruct-HF",
-        "NousResearch/Hermes-3-Llama-3.1-8B",
-    ]
+
+    default_model = default_model
+    default_image_model = default_image_model
+    model_aliases = model_aliases
+    image_models = image_models
+
+    model_data: dict[str, dict] = {}
 
     @classmethod
     def get_models(cls) -> list[str]:
         if not cls.models:
+            models = text_models.copy()
             url = "https://huggingface.co/api/models?inference=warm&pipeline_tag=text-generation"
-            models = [model["id"] for model in requests.get(url).json()]
-            models.extend(cls.extra_models)
-            models.sort()
-            if not cls.image_models:
-                url = "https://huggingface.co/api/models?pipeline_tag=text-to-image"
-                cls.image_models = [model["id"] for model in requests.get(url).json() if model["trendingScore"] >= 20]
-                cls.image_models.sort()
-                models.extend(cls.image_models)
-            cls.models = list(set(models))
+            response = requests.get(url)
+            if response.ok: 
+                extra_models = [model["id"] for model in response.json() if model.get("trendingScore", 0) >= 10]
+                models = extra_models + vision_models + [model for model in models if model not in extra_models]
+            url = "https://huggingface.co/api/models?pipeline_tag=text-to-image"
+            response = requests.get(url)
+            cls.image_models = image_models.copy()
+            if response.ok:
+                extra_models = [model["id"] for model in response.json() if model.get("trendingScore", 0) >= 20] 
+                cls.image_models.extend([model for model in extra_models if model not in cls.image_models])
+            models.extend([model for model in cls.image_models if model not in models])
+            cls.models = models
         return cls.models
+
+    @classmethod
+    async def get_model_data(cls, session: StreamSession, model: str) -> str:
+        if model in cls.model_data:
+            return cls.model_data[model]
+        async with session.get(f"https://huggingface.co/api/models/{model}") as response:
+            if response.status == 404:
+                raise ModelNotSupportedError(f"Model is not supported: {model} in: {cls.__name__}")
+            await raise_for_status(response)
+            cls.model_data[model] = await response.json()
+        return cls.model_data[model]
 
     @classmethod
     async def create_async_generator(
@@ -58,6 +70,7 @@ class HuggingFace(AsyncGeneratorProvider, ProviderModelMixin):
         prompt: str = None,
         action: str = None,
         extra_data: dict = {},
+        seed: int = None,
         **kwargs
     ) -> AsyncResult:
         try:
@@ -83,29 +96,26 @@ class HuggingFace(AsyncGeneratorProvider, ProviderModelMixin):
         if api_key is not None:
             headers["Authorization"] = f"Bearer {api_key}"
         payload = None
-        if cls.get_models() and model in cls.image_models:
-            stream = False
-            prompt = messages[-1]["content"] if prompt is None else prompt
-            payload = {"inputs": prompt, "parameters": {"seed": random.randint(0, 2**32), **extra_data}}
-        else:
-            params = {
-                "return_full_text": False,
-                "max_new_tokens": max_tokens,
-                "temperature": temperature,
-                **extra_data
-            }
-            do_continue = action == "continue"
+        params = {
+            "return_full_text": False,
+            "max_new_tokens": max_tokens,
+            "temperature": temperature,
+            **extra_data
+        }
+        do_continue = action == "continue"
         async with StreamSession(
             headers=headers,
             proxy=proxy,
             timeout=600
         ) as session:
             if payload is None:
-                async with session.get(f"https://huggingface.co/api/models/{model}") as response:
-                    if response.status == 404:
-                        raise ModelNotSupportedError(f"Model is not supported: {model} in: {cls.__name__}")
-                    await raise_for_status(response)
-                    model_data = await response.json()
+                model_data = await cls.get_model_data(session, model)
+                pipeline_tag = model_data.get("pipeline_tag")
+                if pipeline_tag == "text-to-image":
+                    stream = False
+                    inputs = format_image_prompt(messages, prompt)
+                    payload = {"inputs": inputs, "parameters": {"seed": random.randint(0, 2**32) if seed is None else seed, **extra_data}}
+                elif pipeline_tag in ("text-generation", "image-text-to-text"):
                     model_type = None
                     if "config" in model_data and "model_type" in model_data["config"]:
                         model_type = model_data["config"]["model_type"]
@@ -116,16 +126,20 @@ class HuggingFace(AsyncGeneratorProvider, ProviderModelMixin):
                         if len(messages) > 6:
                             messages = messages[:3] + messages[-3:]
                         else:
-                            messages = [m for m in messages if m["role"] == "system"] + [messages[-1]]
+                            messages = [m for m in messages if m["role"] == "system"] + [{"role": "user", "content": get_last_user_message(messages)}]
                         inputs = get_inputs(messages, model_data, model_type, do_continue)
                         debug.log(f"New len: {len(inputs)}")
                     if model_type == "gpt2" and max_tokens >= 1024:
                         params["max_new_tokens"] = 512
-                payload = {"inputs": inputs, "parameters": params, "stream": stream}
+                    if seed is not None:
+                        params["seed"] = seed
+                    payload = {"inputs": inputs, "parameters": params, "stream": stream}
+                else:
+                    raise ModelNotSupportedError(f"Model is not supported: {model} in: {cls.__name__} pipeline_tag: {pipeline_tag}")
 
             async with session.post(f"{api_base.rstrip('/')}/models/{model}", json=payload) as response:
                 if response.status == 404:
-                    raise ModelNotFoundError(f"Model is not supported: {model}")
+                    raise ModelNotSupportedError(f"Model is not supported: {model}")
                 await raise_for_status(response)
                 if stream:
                     first = True
@@ -150,7 +164,7 @@ class HuggingFace(AsyncGeneratorProvider, ProviderModelMixin):
                     if response.headers["content-type"].startswith("image/"):
                         base64_data = base64.b64encode(b"".join([chunk async for chunk in response.iter_content()]))
                         url = f"data:{response.headers['content-type']};base64,{base64_data.decode()}"
-                        yield ImageResponse(url, prompt)
+                        yield ImageResponse(url, inputs)
                     else:
                         yield (await response.json())[0]["generated_text"].strip()
 

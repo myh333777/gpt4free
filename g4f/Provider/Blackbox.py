@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 from aiohttp import ClientSession
-
 import re
 import json
 import random
 import string
 from pathlib import Path
+from typing import Optional
 
 from ..typing import AsyncResult, Messages, ImagesType
 from ..requests.raise_for_status import raise_for_status
 from .base_provider import AsyncGeneratorProvider, ProviderModelMixin
-from ..image import ImageResponse, to_data_uri
+from ..image import to_data_uri
 from ..cookies import get_cookies_dir
-from .helper import format_prompt
-from ..providers.response import FinishReason, JsonConversation, Reasoning
+from .helper import format_prompt, format_image_prompt
+from ..providers.response import JsonConversation, ImageResponse
+from ..errors import ModelNotSupportedError
 
 class Conversation(JsonConversation):
     validated_value: str = None
@@ -34,31 +35,36 @@ class Blackbox(AsyncGeneratorProvider, ProviderModelMixin):
     supports_system_message = True
     supports_message_history = True
     
-    default_model = "blackboxai"
+    default_model = "BLACKBOXAI"
     default_vision_model = default_model
     default_image_model = 'ImageGeneration' 
-    image_models = [default_image_model, "ImageGeneration2"]
-    vision_models = [default_vision_model, 'gpt-4o', 'gemini-pro', 'gemini-1.5-flash', 'llama-3.1-8b', 'llama-3.1-70b', 'llama-3.1-405b']
     
-    userSelectedModel = ['gpt-4o', 'gemini-pro', 'claude-sonnet-3.5', 'deepseek-r1', 'deepseek-v3', 'blackboxai-pro']
+    image_models = [default_image_model]   
+    vision_models = [default_vision_model, 'GPT-4o', 'o3-mini', 'Gemini-PRO', 'gemini-1.5-flash', 'llama-3.1-8b', 'llama-3.1-70b', 'llama-3.1-405b', 'Gemini-Flash-2.0']
+    
+    premium_models = ['GPT-4o', 'o1', 'o3-mini', 'Gemini-PRO', 'Claude-Sonnet-3.5']
+
+    userSelectedModel = ['DeepSeek-V3', 'DeepSeek-R1', 'BLACKBOXAI-PRO', 'Meta-Llama-3.3-70B-Instruct-Turbo', 'Mistral-Small-24B-Instruct-2501', 'DeepSeek-LLM-Chat-(67B)', 'DBRX-Instruct', 'Qwen-QwQ-32B-Preview', 'Nous-Hermes-2-Mixtral-8x7B-DPO', 'Gemini-Flash-2.0'] + premium_models
 
     agentMode = {
-        'ImageGeneration': {'mode': True, 'id': "ImageGenerationLV45LJp", 'name': "Image Generation"},
-        #
+        'DeepSeek-V3': {'mode': True, 'id': "deepseek-chat", 'name': "DeepSeek-V3"},
+        'DeepSeek-R1': {'mode': True, 'id': "deepseek-reasoner", 'name': "DeepSeek-R1"},
         'Meta-Llama-3.3-70B-Instruct-Turbo': {'mode': True, 'id': "meta-llama/Llama-3.3-70B-Instruct-Turbo", 'name': "Meta-Llama-3.3-70B-Instruct-Turbo"},
-        'Mistral-(7B)-Instruct-v0.2': {'mode': True, 'id': "mistralai/Mistral-7B-Instruct-v0.2", 'name': "Mistral-(7B)-Instruct-v0.2"},
+        'Mistral-Small-24B-Instruct-2501': {'mode': True, 'id': "mistralai/Mistral-Small-24B-Instruct-2501", 'name': "Mistral-Small-24B-Instruct-2501"},
         'DeepSeek-LLM-Chat-(67B)': {'mode': True, 'id': "deepseek-ai/deepseek-llm-67b-chat", 'name': "DeepSeek-LLM-Chat-(67B)"},
         'DBRX-Instruct': {'mode': True, 'id': "databricks/dbrx-instruct", 'name': "DBRX-Instruct"},
         'Qwen-QwQ-32B-Preview': {'mode': True, 'id': "Qwen/QwQ-32B-Preview", 'name': "Qwen-QwQ-32B-Preview"},
         'Nous-Hermes-2-Mixtral-8x7B-DPO': {'mode': True, 'id': "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO", 'name': "Nous-Hermes-2-Mixtral-8x7B-DPO"},
+        'Gemini-Flash-2.0': {'mode': True, 'id': "Gemini/Gemini-Flash-2.0", 'name': "Gemini-Flash-2.0"},
     }
 
     trendingAgentMode = {
+        "o1": {'mode': True, 'id': 'o1'},
+        "o3-mini": {'mode': True, 'id': 'o3-mini'},
         "gemini-1.5-flash": {'mode': True, 'id': 'Gemini'},
         "llama-3.1-8b": {'mode': True, 'id': "llama-3.1-8b"},
         'llama-3.1-70b': {'mode': True, 'id': "llama-3.1-70b"},
         'llama-3.1-405b': {'mode': True, 'id': "llama-3.1-405"},
-        #
         'Python Agent': {'mode': True, 'id': "Python Agent"},
         'Java Agent': {'mode': True, 'id': "Java Agent"},
         'JavaScript Agent': {'mode': True, 'id': "JavaScript Agent"},
@@ -71,12 +77,7 @@ class Blackbox(AsyncGeneratorProvider, ProviderModelMixin):
         'PyTorch Agent': {'mode': True, 'id': "PyTorch Agent"},
         'React Agent': {'mode': True, 'id': "React Agent"},
         'Xcode Agent': {'mode': True, 'id': "Xcode Agent"},
-        'AngularJS Agent': {'mode': True, 'id': "AngularJS Agent"},
-        #
-        'blackboxai-pro': {'mode': True, 'id': "BLACKBOXAI-PRO"},
-        #
-        'repomap': {'mode': True, 'id': "repomap"},
-        #
+        'BLACKBOXAI-PRO': {'mode': True, 'id': "BLACKBOXAI-PRO"},
         'Heroku Agent': {'mode': True, 'id': "Heroku Agent"},
         'Godot Agent': {'mode': True, 'id': "Godot Agent"},
         'Go Agent': {'mode': True, 'id': "Go Agent"},
@@ -99,33 +100,41 @@ class Blackbox(AsyncGeneratorProvider, ProviderModelMixin):
     models = list(dict.fromkeys([default_model, *userSelectedModel, *image_models, *list(agentMode.keys()), *list(trendingAgentMode.keys())]))
 
     model_aliases = {
-        ### chat ###
-        "gpt-4": "gpt-4o",
+        "blackboxai": "BLACKBOXAI",
         "gemini-1.5-flash": "gemini-1.5-flash",
-        "gemini-1.5-pro": "gemini-pro",
-        "claude-3.5-sonnet": "claude-sonnet-3.5",
+        "deepseek-v3": "DeepSeek-V3",
+        "deepseek-r1": "DeepSeek-R1",
         "llama-3.3-70b": "Meta-Llama-3.3-70B-Instruct-Turbo",
-        "mixtral-7b": "Mistral-(7B)-Instruct-v0.2",
+        "mixtral-small-28b": "Mistral-Small-24B-Instruct-2501",
         "deepseek-chat": "DeepSeek-LLM-Chat-(67B)",
         "dbrx-instruct": "DBRX-Instruct",
         "qwq-32b": "Qwen-QwQ-32B-Preview",
         "hermes-2-dpo": "Nous-Hermes-2-Mixtral-8x7B-DPO",
-        "deepseek-chat": "deepseek-v3",
-        
-        ### image ###
+        "gemini-2.0-flash": "Gemini-Flash-2.0",
+        "blackboxai-pro": "BLACKBOXAI-PRO",
         "flux": "ImageGeneration",
-        "flux": "ImageGeneration2",
     }
 
     @classmethod
-    async def fetch_validated(
-        cls,
-        url: str = "https://www.blackbox.ai",
-        force_refresh: bool = False
-    ) -> Optional[str]:
-        """
-        Asynchronously retrieves the validated_value from the specified URL.
-        """
+    def get_models(cls) -> list[str]:
+        models = super().get_models()
+        filtered = [m for m in models if m not in cls.premium_models]
+        filtered += [f"{m} (Premium)" for m in cls.premium_models]
+        return filtered
+
+    @classmethod
+    def get_model(cls, model: str, **kwargs) -> str:
+        try:
+            model = super().get_model(model, **kwargs)
+            return model.split(" (Premium)")[0]
+        except ModelNotSupportedError:
+            base_model = model.split(" (Premium)")[0]
+            if base_model in cls.premium_models:
+                return base_model
+            raise
+
+    @classmethod
+    async def fetch_validated(cls, url: str = "https://www.blackbox.ai", force_refresh: bool = False) -> Optional[str]:
         cache_file = Path(get_cookies_dir()) / 'blackbox.json'
         
         if not force_refresh and cache_file.exists():
@@ -141,14 +150,12 @@ class Blackbox(AsyncGeneratorProvider, ProviderModelMixin):
         uuid_pattern = r'["\']([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})["\']'
 
         def is_valid_context(text: str) -> bool:
-            """Checks if the context is valid."""
             return any(char + '=' in text for char in 'abcdefghijklmnopqrstuvwxyz')
 
         async with ClientSession() as session:
             try:
                 async with session.get(url) as response:
                     if response.status != 200:
-                        print("Failed to load the page.")
                         return None
 
                     page_content = await response.text()
@@ -167,7 +174,6 @@ class Blackbox(AsyncGeneratorProvider, ProviderModelMixin):
                                 if is_valid_context(context):
                                     validated_value = match.group(1)
                                     
-                                    # Save to cache
                                     cache_file.parent.mkdir(exist_ok=True)
                                     try:
                                         with open(cache_file, 'w') as f:
@@ -183,10 +189,9 @@ class Blackbox(AsyncGeneratorProvider, ProviderModelMixin):
         return None
 
     @classmethod
-    def generate_chat_id(cls) -> str:
-        """Generate a random chat ID"""
+    def generate_id(cls, length: int = 7) -> str:
         chars = string.ascii_letters + string.digits
-        return ''.join(random.choice(chars) for _ in range(7))
+        return ''.join(random.choice(chars) for _ in range(length))
 
     @classmethod
     async def create_async_generator(
@@ -195,7 +200,6 @@ class Blackbox(AsyncGeneratorProvider, ProviderModelMixin):
         messages: Messages,
         prompt: str = None,
         proxy: str = None,
-        web_search: bool = False,
         images: ImagesType = None,
         top_p: float = None,
         temperature: float = None,
@@ -215,10 +219,10 @@ class Blackbox(AsyncGeneratorProvider, ProviderModelMixin):
         }
         
         async with ClientSession(headers=headers) as session:
-            if model == "ImageGeneration2":
-                prompt = messages[-1]["content"]
+            if model in "ImageGeneration":
+                prompt = format_image_prompt(messages, prompt)
                 data = {
-                    "query": prompt,
+                    "query": format_image_prompt(messages, prompt),
                     "agentMode": True
                 }
                 headers['content-type'] = 'text/plain;charset=UTF-8'
@@ -236,18 +240,25 @@ class Blackbox(AsyncGeneratorProvider, ProviderModelMixin):
                         image_url_match = re.search(r'!\[.*?\]\((.*?)\)', response_json["markdown"])
                         if image_url_match:
                             image_url = image_url_match.group(1)
-                            yield ImageResponse(images=[image_url], alt=prompt)
+                            yield ImageResponse(images=[image_url], alt=format_image_prompt(messages, prompt))
                             return
 
             if conversation is None or not hasattr(conversation, "chat_id"):
                 conversation = Conversation(model)
                 conversation.validated_value = await cls.fetch_validated()
-                conversation.chat_id = cls.generate_chat_id()
+                conversation.chat_id = cls.generate_id()
                 conversation.message_history = []
-            
-            current_messages = [{"id": conversation.chat_id, "content": format_prompt(messages), "role": "user"}]
-            conversation.message_history.extend(messages)
 
+            current_messages = []
+            for i, msg in enumerate(messages):
+                msg_id = conversation.chat_id if i == 0 and msg["role"] == "user" else cls.generate_id()
+                current_msg = {
+                    "id": msg_id,
+                    "content": msg["content"],
+                    "role": msg["role"]
+                }
+                current_messages.append(current_msg)
+            
             if images is not None:
                 current_messages[-1]['data'] = {
                     "imagesData": [
@@ -280,6 +291,7 @@ class Blackbox(AsyncGeneratorProvider, ProviderModelMixin):
                 "clickedAnswer3": False,
                 "clickedForceWebSearch": False,
                 "visitFromDelta": False,
+                "isMemoryEnabled": False,
                 "mobileClient": False,
                 "userSelectedModel": model if model in cls.userSelectedModel else None,
                 "validated": conversation.validated_value,
@@ -289,64 +301,30 @@ class Blackbox(AsyncGeneratorProvider, ProviderModelMixin):
                 "domains": None,
                 "vscodeClient": False,
                 "codeInterpreterMode": False,
-                "webSearchMode": web_search
+                "customProfile": {
+                    "name": "",
+                    "occupation": "",
+                    "traits": [],
+                    "additionalInfo": "",
+                    "enableNewChats": False
+                },
+                "session": None,
+                "isPremium": False, 
+                "subscriptionCache": None,
+                "beastMode": False,
+                "webSearchMode": False
             }
             
             async with session.post(cls.api_endpoint, json=data, proxy=proxy) as response:
                 await raise_for_status(response)
-                response_text = await response.text()
-                parts = response_text.split('$~~~$')
-                text_to_yield = parts[2] if len(parts) >= 3 else response_text
-                
-                if not text_to_yield or text_to_yield.isspace():
-                    return
+                full_response = []
+                async for chunk in response.content.iter_any():
+                    if chunk:
+                        chunk_text = chunk.decode()
+                        full_response.append(chunk_text)
+                        yield chunk_text
 
-                full_response = ""
-                
-                if model in cls.image_models:
-                    image_url_match = re.search(r'!\[.*?\]\((.*?)\)', text_to_yield)
-                    if image_url_match:
-                        image_url = image_url_match.group(1)
-                        prompt = messages[-1]["content"]
-                        yield ImageResponse(images=[image_url], alt=prompt)
-                else:
-                    if "<think>" in text_to_yield and "</think>" in chunk_text :
-                        chunk_text = text_to_yield.split('<think>', 1)
-                        yield chunk_text[0]
-                        chunk_text = text_to_yield.split('</think>', 1)
-                        yield Reasoning(chunk_text[0])
-                        yield chunk_text[1]
-                        full_response = text_to_yield
-                    elif "Generated by BLACKBOX.AI" in text_to_yield:
-                        conversation.validated_value = await cls.fetch_validated(force_refresh=True)
-                        if conversation.validated_value:
-                            data["validated"] = conversation.validated_value
-                            async with session.post(cls.api_endpoint, json=data, proxy=proxy) as new_response:
-                                await raise_for_status(new_response)
-                                new_response_text = await new_response.text()
-                                new_parts = new_response_text.split('$~~~$')
-                                new_text = new_parts[2] if len(new_parts) >= 3 else new_response_text
-                                
-                                if new_text and not new_text.isspace():
-                                    yield new_text
-                                    full_response = new_text
-                        else:
-                            if text_to_yield and not text_to_yield.isspace():
-                                yield text_to_yield
-                                full_response = text_to_yield
-                    else:
-                        if text_to_yield and not text_to_yield.isspace():
-                            yield text_to_yield
-                            full_response = text_to_yield
-
-                    if full_response:
-                        if max_tokens and len(full_response) >= max_tokens:
-                            reason = "length"
-                        else:
-                            reason = "stop"
-
-                        if return_conversation:
-                            conversation.message_history.append({"role": "assistant", "content": full_response})
-                            yield conversation
-                        
-                        yield FinishReason(reason)
+                if return_conversation:
+                    full_response_text = ''.join(full_response)
+                    conversation.message_history.append({"role": "assistant", "content": full_response_text})
+                    yield conversation

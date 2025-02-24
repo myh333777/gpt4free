@@ -36,13 +36,13 @@ class DDG(AsyncGeneratorProvider, ProviderModelMixin):
     supports_message_history = True
     
     default_model = "gpt-4o-mini"
-    models = [default_model, "claude-3-haiku-20240307", "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", "mistralai/Mixtral-8x7B-Instruct-v0.1"]
+    models = [default_model, "meta-llama/Llama-3.3-70B-Instruct-Turbo", "claude-3-haiku-20240307", "o3-mini", "mistralai/Mistral-Small-24B-Instruct-2501"]
 
     model_aliases = {
         "gpt-4": "gpt-4o-mini",
+        "llama-3.3-70b": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
         "claude-3-haiku": "claude-3-haiku-20240307",
-        "llama-3.1-70b": "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
-        "mixtral-8x7b": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "mixtral-small-24b": "mistralai/Mistral-Small-24B-Instruct-2501",
     }
 
     last_request_time = 0
@@ -173,12 +173,10 @@ class DDG(AsyncGeneratorProvider, ProviderModelMixin):
                             n: c.value 
                             for n, c in session.cookie_jar.filter_cookies(cls.url).items()
                         }
+                        yield conversation
 
                     if reason is not None:
                         yield FinishReason(reason)
-    
-                    if return_conversation:
-                        yield conversation
 
         except asyncio.TimeoutError as e:
             raise TimeoutError(f"Request timed out: {str(e)}")

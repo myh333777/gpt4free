@@ -7,13 +7,14 @@ from urllib.parse import quote_plus
 from typing import Optional
 from aiohttp import ClientSession
 
-from .helper import filter_none
+from .helper import filter_none, format_image_prompt
 from .base_provider import AsyncGeneratorProvider, ProviderModelMixin
 from ..typing import AsyncResult, Messages, ImagesType
 from ..image import to_data_uri
+from ..errors import ModelNotFoundError
 from ..requests.raise_for_status import raise_for_status
 from ..requests.aiohttp import get_connector
-from ..providers.response import ImageResponse, FinishReason, Usage
+from ..providers.response import ImageResponse, ImagePreview, FinishReason, Usage, Reasoning
 
 DEFAULT_HEADERS = {
     'Accept': '*/*',
@@ -38,25 +39,23 @@ class PollinationsAI(AsyncGeneratorProvider, ProviderModelMixin):
     default_model = "openai"
     default_image_model = "flux"
     default_vision_model = "gpt-4o"
-    extra_image_models = ["midjourney", "dall-e-3", "flux-pro"]
+    text_models = [default_model]
+    image_models = [default_image_model]
+    extra_image_models = ["flux-pro", "flux-dev", "flux-schnell", "midjourney", "dall-e-3"]
     vision_models = [default_vision_model, "gpt-4o-mini"]
-    extra_text_models = ["claude", "claude-email", "deepseek-reasoner"] + vision_models
+    extra_text_models = ["claude", "claude-email", "deepseek-reasoner", "deepseek-r1"] + vision_models
+    _models_loaded = False
     model_aliases = {
         ### Text Models ###
         "gpt-4o-mini": "openai",
         "gpt-4": "openai-large",
         "gpt-4o": "openai-large",
-        "qwen-2.5-72b": "qwen",
         "qwen-2.5-coder-32b": "qwen-coder",
         "llama-3.3-70b": "llama",
         "mistral-nemo": "mistral",
-        #"mistral-nemo": "unity", # bug with image url response
-        #"gpt-4o-mini": "midijourney", # bug with the answer
         "gpt-4o-mini": "rtist",
         "gpt-4o": "searchgpt",
-        #"mistral-nemo": "evil",
         "gpt-4o-mini": "p1",
-        "deepseek-chat": "deepseek",
         "deepseek-chat": "claude-hybridspace",
         "llama-3.1-8b": "llamalight",
         "gpt-4o-vision": "gpt-4o",
@@ -64,31 +63,59 @@ class PollinationsAI(AsyncGeneratorProvider, ProviderModelMixin):
         "gpt-4o-mini": "claude",
         "deepseek-chat": "claude-email",
         "deepseek-r1": "deepseek-reasoner",
+        "gemini-2.0-flash": "gemini",
+        "gemini-2.0-flash-thinking": "gemini-thinking",
         
         ### Image Models ###
-        "sdxl-turbo": "turbo", 
+        "sdxl-turbo": "turbo",
     }
-    text_models = []
 
     @classmethod
     def get_models(cls, **kwargs):
-        # Fetch image models if not cached
-        if not cls.image_models:
-            url = "https://image.pollinations.ai/models"
-            response = requests.get(url)
-            raise_for_status(response)
-            cls.image_models = response.json()
-            cls.image_models.extend(cls.extra_image_models)
+        if not cls._models_loaded:
+            try:
+                # Update of image models
+                image_response = requests.get("https://image.pollinations.ai/models")
+                image_response.raise_for_status()
+                new_image_models = image_response.json()
+                
+                # Combine models without duplicates
+                all_image_models = (
+                    cls.image_models +  # Already contains the default
+                    cls.extra_image_models + 
+                    new_image_models
+                )
+                cls.image_models = list(dict.fromkeys(all_image_models))
 
-        # Fetch text models if not cached
-        if not cls.text_models:
-            url = "https://text.pollinations.ai/models"
-            response = requests.get(url)
-            raise_for_status(response)
-            cls.text_models = [model.get("name") for model in response.json()]
-            cls.text_models.extend(cls.extra_text_models)
+                # Update of text models
+                text_response = requests.get("https://text.pollinations.ai/models")
+                text_response.raise_for_status()
+                original_text_models = [
+                    model.get("name") 
+                    for model in text_response.json()
+                ]
+                
+                # Combining text models
+                combined_text = (
+                    cls.text_models +  # Already contains the default
+                    cls.extra_text_models + 
+                    [
+                        model for model in original_text_models
+                        if model not in cls.extra_text_models
+                    ]
+                )
+                cls.text_models = list(dict.fromkeys(combined_text))
+                
+                cls._models_loaded = True
 
-        # Return combined models
+            except Exception as e:
+                # Save default models in case of an error
+                if not cls.text_models:
+                    cls.text_models = [cls.default_model]
+                if not cls.image_models:
+                    cls.image_models = [cls.default_image_model]
+                raise RuntimeError(f"Failed to fetch models: {e}") from e
+            
         return cls.text_models + cls.image_models
 
     @classmethod
@@ -97,7 +124,6 @@ class PollinationsAI(AsyncGeneratorProvider, ProviderModelMixin):
         model: str,
         messages: Messages,
         proxy: str = None,
-        # Image specific parameters
         prompt: str = None,
         width: int = 1024,
         height: int = 1024,
@@ -106,7 +132,6 @@ class PollinationsAI(AsyncGeneratorProvider, ProviderModelMixin):
         private: bool = False,
         enhance: bool = False,
         safe: bool = False,
-        # Text specific parameters
         images: ImagesType = None,
         temperature: float = None,
         presence_penalty: float = None,
@@ -116,29 +141,31 @@ class PollinationsAI(AsyncGeneratorProvider, ProviderModelMixin):
         cache: bool = False,
         **kwargs
     ) -> AsyncResult:
+        cls.get_models()
         if images is not None and not model:
             model = cls.default_vision_model
-        model = cls.get_model(model)
-        if not cache and seed is None:
-            seed = random.randint(0, 100000)
+        try:
+            model = cls.get_model(model)
+        except ModelNotFoundError:
+            if model not in cls.image_models:
+                raise
 
-        # Check if models
-        # Image generation
         if model in cls.image_models:
-           yield await cls._generate_image(
+            async for chunk in cls._generate_image(
                 model=model,
-                prompt=messages[-1]["content"] if prompt is None else prompt,
+                prompt=format_image_prompt(messages, prompt),
                 proxy=proxy,
                 width=width,
                 height=height,
                 seed=seed,
+                cache=cache,
                 nologo=nologo,
                 private=private,
                 enhance=enhance,
                 safe=safe
-            )
+            ):
+                yield chunk
         else:
-            # Text generation
             async for result in cls._generate_text(
                 model=model,
                 messages=messages,
@@ -163,26 +190,35 @@ class PollinationsAI(AsyncGeneratorProvider, ProviderModelMixin):
         width: int,
         height: int,
         seed: Optional[int],
+        cache: bool,
         nologo: bool,
         private: bool,
         enhance: bool,
         safe: bool
-    ) -> ImageResponse:
+    ) -> AsyncResult:
+        if not cache and seed is None:
+            seed = random.randint(9999, 99999999)
         params = {
-            "seed": seed,
-            "width": width,
-            "height": height,
+            "seed": str(seed) if seed is not None else None,
+            "width": str(width),
+            "height": str(height),
             "model": model,
-            "nologo": nologo,
-            "private": private,
-            "enhance": enhance,
-            "safe": safe
+            "nologo": str(nologo).lower(),
+            "private": str(private).lower(),
+            "enhance": str(enhance).lower(),
+            "safe": str(safe).lower()
         }
-        params = {k: json.dumps(v) if isinstance(v, bool) else v for k, v in params.items() if v is not None}
+        params = {k: v for k, v in params.items() if v is not None}
+        query = "&".join(f"{k}={quote_plus(v)}" for k, v in params.items())
+        prefix = f"{model}_{seed}" if seed is not None else model
+        url = f"{cls.image_api_endpoint}prompt/{prefix}_{quote_plus(prompt)}?{query}"
+        yield ImagePreview(url, prompt)
+
         async with ClientSession(headers=DEFAULT_HEADERS, connector=get_connector(proxy=proxy)) as session:
-            async with session.head(f"{cls.image_api_endpoint}prompt/{quote_plus(prompt)}", params=params) as response:
+            async with session.get(url, allow_redirects=True) as response:
                 await raise_for_status(response)
-                return ImageResponse(str(response.url), prompt)
+                image_url = str(response.url)
+                yield ImageResponse(image_url, prompt)
 
     @classmethod
     async def _generate_text(
@@ -199,60 +235,51 @@ class PollinationsAI(AsyncGeneratorProvider, ProviderModelMixin):
         seed: Optional[int],
         cache: bool
     ) -> AsyncResult:
-        jsonMode = False
-        if response_format is not None and "type" in response_format:
-            if response_format["type"] == "json_object":
-                jsonMode = True
+        if not cache and seed is None:
+            seed = random.randint(9999, 99999999)
+        json_mode = False
+        if response_format and response_format.get("type") == "json_object":
+            json_mode = True
 
-        if images is not None and messages:
+        if images and messages:
             last_message = messages[-1].copy()
-            last_message["content"] = [
-                *[{
+            image_content = [
+                {
                     "type": "image_url",
                     "image_url": {"url": to_data_uri(image)}
-                } for image, _ in images],
-                {
-                    "type": "text",
-                    "text": messages[-1]["content"]
                 }
+                for image, _ in images
             ]
+            last_message["content"] = image_content + [{"type": "text", "text": last_message["content"]}]
             messages[-1] = last_message
 
         async with ClientSession(headers=DEFAULT_HEADERS, connector=get_connector(proxy=proxy)) as session:
-            data = {
+            data = filter_none(**{
                 "messages": messages,
                 "model": model,
                 "temperature": temperature,
                 "presence_penalty": presence_penalty,
                 "top_p": top_p,
                 "frequency_penalty": frequency_penalty,
-                "jsonMode": jsonMode,
-                "stream": False, # To get more informations like Usage and FinishReason
+                "jsonMode": json_mode,
+                "stream": False,
                 "seed": seed,
                 "cache": cache
-            }
-            async with session.post(cls.text_api_endpoint, json=filter_none(**data)) as response:
+            })
+            
+            async with session.post(cls.text_api_endpoint, json=data) as response:
                 await raise_for_status(response)
-                async for line in response.content:
-                    decoded_chunk = line.decode(errors="replace")
-                    # If [DONE].
-                    if "data: [DONE]" in decoded_chunk:
-                        break
-                    # Processing JSON format
-                    try:
-                        # Remove the prefix “data: “ and parse JSON
-                        json_str = decoded_chunk.replace("data:", "").strip()
-                        data = json.loads(json_str)
-                        choice = data["choices"][0]
-                        if "usage" in data:
-                            yield Usage(**data["usage"])
-                        if "message" in choice and "content" in choice["message"] and choice["message"]["content"]:
-                            yield choice["message"]["content"].replace("\\(", "(").replace("\\)", ")")
-                        elif "delta" in choice and "content" in choice["delta"] and choice["delta"]["content"]:
-                            yield choice["delta"]["content"].replace("\\(", "(").replace("\\)", ")")
-                        if "finish_reason" in choice and choice["finish_reason"] is not None:
-                            yield FinishReason(choice["finish_reason"])
-                            break
-                    except json.JSONDecodeError:
-                        yield decoded_chunk.strip()
-                        continue
+                result = await response.json()
+                choice = result["choices"][0]
+                message = choice.get("message", {})
+                content = message.get("content", "")
+                
+                if content:
+                    yield content.replace("\\(", "(").replace("\\)", ")")
+                
+                if "usage" in result:
+                    yield Usage(**result["usage"])
+                
+                finish_reason = choice.get("finish_reason")
+                if finish_reason:
+                    yield FinishReason(finish_reason)

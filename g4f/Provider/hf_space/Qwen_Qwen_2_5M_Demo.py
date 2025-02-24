@@ -8,20 +8,20 @@ from ...typing import AsyncResult, Messages
 from ..base_provider import AsyncGeneratorProvider, ProviderModelMixin
 from ..helper import format_prompt
 from ...providers.response import JsonConversation, Reasoning
+from ..helper import get_last_user_message
 from ... import debug
 
 class Qwen_Qwen_2_5M_Demo(AsyncGeneratorProvider, ProviderModelMixin):
     url = "https://qwen-qwen2-5-1m-demo.hf.space"
     api_endpoint = f"{url}/run/predict?__theme=light"
-    
+
     working = True
     supports_stream = True
     supports_system_message = True
     supports_message_history = False
-    
-    default_model = "qwen-qwen2-5m-demo"
+
+    default_model = "qwen-2.5-1m-demo"
     models = [default_model]
-    model_aliases = {"qwen-2-5m": default_model}
 
     @classmethod
     async def create_async_generator(
@@ -42,7 +42,7 @@ class Qwen_Qwen_2_5M_Demo(AsyncGeneratorProvider, ProviderModelMixin):
         if return_conversation:
             yield JsonConversation(session_hash=session_hash)
 
-        prompt = format_prompt(messages) if conversation is None else messages[-1]["content"]
+        prompt = format_prompt(messages) if conversation is None else get_last_user_message(messages)
 
         headers = {
             'accept': '*/*',

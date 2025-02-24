@@ -31,8 +31,8 @@ class Website:
         }
 
     def _chat(self, conversation_id):
-        if '-' not in conversation_id:
-            return redirect_home()
+        if conversation_id == "share":
+            return render_template('index.html', chat_id=str(uuid.uuid4()))
         return render_template('index.html', chat_id=conversation_id)
 
     def _index(self):
